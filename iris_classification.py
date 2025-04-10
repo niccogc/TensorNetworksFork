@@ -72,7 +72,7 @@ print("d Loss allclose:", torch.allclose(d_loss, d_loss_auto))
 print("dd Loss allclose:", torch.allclose(dd_loss, dd_loss_auto))
 #%%
 # Train the model
-layer.tensor_network.swipe(xinp_train, y_train, bf, lr=1.0, convergence_criterion=convergence_criterion, orthonormalize=True, method='exact', eps=1e-5, verbose=True, num_swipes=100)
+layer.tensor_network.accumulating_swipe(xinp_train, y_train, bf, lr=1.0, convergence_criterion=convergence_criterion, orthonormalize=True, method='exact', eps=1e-5, verbose=True, num_swipes=100)
 #%%
 # Calculate accuracy on train set
 y_pred_train = layer(xinp_train)

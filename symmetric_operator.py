@@ -45,7 +45,7 @@ xinp = xinp.cuda()
 xinput = [xinp[:, i] for i in range(len(layer.tensor_network.input_nodes))]
 
 with torch.inference_mode():
-    layer.tensor_network.swipe(xinput, y, bf, verbose=True)
+    layer.tensor_network.accumulating_swipe(xinput, y, bf, verbose=True)
 #%%
 layer.tensor_network.disconnect(layer.tensor_network.input_nodes) # Make this one virtual by returning a virtual tensor network
 #%%

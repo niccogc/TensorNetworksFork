@@ -2,7 +2,7 @@ import torch
 import string
 from collections import deque
 from tensor.node import TensorNode
-from tensor.utils import tensor_gradient_solver
+from tqdm.auto import tqdm
 
 class TensorNetwork:
     def __init__(self, input_nodes, main_nodes, output_labels=('s',), sample_dim='s'):
@@ -145,6 +145,26 @@ class TensorNetwork:
         # Determine broadcast
         broadcast_dims = tuple(d for d in self.output_labels if d not in node.dim_labels)
         non_broadcast_dims = tuple(d for d in self.output_labels if d != self.sample_dim)
+
+        A, b, J = self.get_A_b(node, d_loss, dd_loss)
+
+        # Solve the system
+        dim_labels = node.dim_labels
+        step_tensor = self.solve_system(A, b, method=method, eps=eps)
+
+        # Permute to match node dimension order
+        permute = [J.dim_labels[len(broadcast_dims):].index(l) for l in dim_labels]
+        step_tensor = step_tensor.permute(*permute)
+
+        node.update_node(step_tensor, lr=lr)
+        return step_tensor
+
+    def get_A_b(self, node, d_loss, dd_loss):
+        """Finds the update step for a given node"""
+
+        # Determine broadcast
+        broadcast_dims = tuple(d for d in self.output_labels if d not in node.dim_labels)
+        non_broadcast_dims = tuple(d for d in self.output_labels if d != self.sample_dim)
         
         # Compute the Jacobian
         J = self.compute_jacobian_stack(node).expand_labels(self.output_labels, d_loss.shape).permute_first(*broadcast_dims)
@@ -180,6 +200,10 @@ class TensorNetwork:
         A = torch.einsum(einsum_A, J.tensor, J.tensor, dd_loss)
         b = torch.einsum(einsum_b, J.tensor, d_loss)
 
+        return A, b, J
+    
+    def solve_system(self, A, b, method='exact', eps=0.0):
+        """Finds the update step for a given node"""
         # Solve the system
         A_f = A.flatten(0, A.ndim//2-1).flatten(1, -1)
         b_f = b.flatten()
@@ -195,48 +219,12 @@ class TensorNetwork:
             L = torch.linalg.cholesky(A_f_reg)
             x = torch.cholesky_solve(-b_f.unsqueeze(-1), L)
             x = x.squeeze(-1)
-        elif method.lower() == 'tt' or method.lower() == 'tensor_train':
-            x = tensor_gradient_solver(J, d_loss, dd_loss, broadcast_dims, r=2, ridge_eps=eps).permute(*node.dim_labels)
-            return x.tensor
         else:
             raise ValueError(f"Unknown method: {method}")
 
         step_tensor = x.reshape(b.shape)
-
-        # Permute to match node dimension order
-        permute = [J.dim_labels[len(broadcast_dims):].index(l) for l in node.dim_labels]
-        step_tensor = step_tensor.permute(*permute)
-
-        node.update_node(step_tensor, lr=lr)
         return step_tensor
 
-    def get_A_b(self, node, d_loss, sqd_loss, output_dims=tuple()):
-        """Finds the update step for a given node"""
-
-        # Determine broadcast and gradient dimensions
-        broadcast_dims = tuple(b for b in output_dims if b not in node.dim_labels)
-        J = self.compute_jacobian_stack(node).expand_labels(output_dims, d_loss.shape).permute_first(*broadcast_dims)
-
-        # Assign unique einsum labels
-        all_letters = iter(string.ascii_letters)
-        dim_labels = {dim: next(all_letters) for dim in output_dims}  # Assign letters to output dims
-        broad_ein = ''.join(dim_labels[b] for b in broadcast_dims)
-        output_ein = ''.join(dim_labels[o] for o in output_dims)
-
-        # Generate jacobian dimension labels
-        num_jacobian_dims = len(J.dim_labels) - len(broadcast_dims)
-        grad1_ein = ''.join(next(all_letters) for _ in range(num_jacobian_dims))
-        grad2_ein = ''.join(next(all_letters) for _ in range(num_jacobian_dims))
-
-        # Construct einsum notations
-        einsum_A = f"{broad_ein}{grad1_ein},{broad_ein}{grad2_ein},{output_ein}->{grad1_ein}{grad2_ein}"
-        einsum_b = f"{broad_ein}{grad1_ein},{output_ein}->{grad1_ein}"
-
-        # Compute einsum operations
-        A = torch.einsum(einsum_A, J.tensor, J.tensor, sqd_loss)
-        b = torch.einsum(einsum_b, J.tensor, d_loss)
-
-        return A, b, J
 
     def set_input(self, x):
         """Sets the input tensor for the network."""
@@ -254,7 +242,6 @@ class TensorNetwork:
         if was_updated:
             self.left_stacks = None
             self.right_stacks = None
-            print("Input tensors updated. Stacks will be recomputed.")
         return was_updated
     
     def disconnect(self, nodes):
@@ -313,6 +300,135 @@ class TensorNetwork:
                     break
             if converged:
                 break
+
+    def accumulating_swipe(self, x, y_true, loss_fn, batch_size=1, method='exact', eps=1e-12, num_swipes=1, lr=1.0, convergence_criterion=None, orthonormalize=False, verbose=False, skip_right=False):
+        """Swipes the network to minimize the loss using accumulated A and b over mini-batches."""
+
+        data_size = len(x) if isinstance(x, torch.Tensor) else x[0].shape[0]
+        batches = (data_size + batch_size - 1) // batch_size # round up division
+
+        for _ in range(num_swipes):
+            # LEFT TO RIGHT
+            for n in self.main_nodes:
+                A_out, b_out = None, None
+                total_loss = 0.0
+
+                for b in tqdm(range(batches), desc=f"Left to right pass ({n.name if hasattr(n, 'name') else 'node'})", disable=not verbose):
+                    x_batch = x[b*batch_size:(b+1)*batch_size] if isinstance(x, torch.Tensor) else [x[i][b*batch_size:(b+1)*batch_size] for i in range(len(x))]
+                    y_batch = y_true[b*batch_size:(b+1)*batch_size]
+
+                    y_pred = self.forward(x_batch).permute_first(*self.output_labels).tensor
+                    loss, d_loss, sqd_loss = loss_fn.forward(y_pred, y_batch)
+
+                    A, b_vec, J = self.get_A_b(n, d_loss, sqd_loss)
+                    if A_out is None:
+                        A_out = A
+                        b_out = b_vec
+                    else:
+                        A_out.add_(A)
+                        b_out.add_(b_vec)
+
+                    total_loss += loss.mean().item()
+
+                if verbose:
+                    print(f"Left loss ({n.name if hasattr(n, 'name') else 'node'}):", total_loss / batches)
+                try:
+                    step_tensor = self.solve_system(A_out, b_out, method=method, eps=eps)
+                # _LinAlgError # if the system is singular return
+                except torch.linalg.LinAlgError:
+                    print(f"Singular system for node {n.name if hasattr(n, 'name') else 'node'}")
+                    return False
+                
+                # Permute to match node dimension order
+                broadcast_dims = tuple(d for d in self.output_labels if d not in n.dim_labels)
+                permute = [J.dim_labels[len(broadcast_dims):].index(l) for l in n.dim_labels]
+                step_tensor = step_tensor.permute(*permute)
+
+                n.update_node(step_tensor, lr=lr)
+                if orthonormalize:
+                    self.node_orthonormalize_left(n)
+                self.left_update_stacks(n)
+
+                # Convergence check after node update
+                if convergence_criterion is not None:
+                    y_trues = []
+                    y_preds = []
+                    for b in range(batches):
+                        x_batch = x[b*batch_size:(b+1)*batch_size] if isinstance(x, torch.Tensor) else [x[i][b*batch_size:(b+1)*batch_size] for i in range(len(x))]
+                        y_batch = y_true[b*batch_size:(b+1)*batch_size]
+
+                        y_pred = self.forward(x_batch).permute_first(*self.output_labels).tensor
+                        y_trues.append(y_batch)
+                        y_preds.append(y_pred)
+                    y_trues = torch.cat(y_trues, dim=0)
+                    y_preds = torch.cat(y_preds, dim=0)
+
+                    if convergence_criterion(y_preds, y_trues):
+                        print('Converged (left pass)')
+                        return True
+
+            if skip_right:
+                continue
+
+            # RIGHT TO LEFT
+            for n in reversed(self.main_nodes):
+                A_out, b_out = None, None
+                total_loss = 0.0
+
+                for b in tqdm(range(batches), desc=f"Right to left pass ({n.name if hasattr(n, 'name') else 'node'})", disable=not verbose):
+                    x_batch = x[b*batch_size:(b+1)*batch_size] if isinstance(x, torch.Tensor) else [x[i][b*batch_size:(b+1)*batch_size] for i in range(len(x))]
+                    y_batch = y_true[b*batch_size:(b+1)*batch_size]
+
+                    y_pred = self.forward(x_batch).permute_first(*self.output_labels).tensor
+                    loss, d_loss, sqd_loss = loss_fn.forward(y_pred, y_batch)
+
+                    A, b_vec, J = self.get_A_b(n, d_loss, sqd_loss)
+                    if A_out is None:
+                        A_out = A
+                        b_out = b_vec
+                    else:
+                        A_out.add_(A)
+                        b_out.add_(b_vec)
+
+                    total_loss += loss.mean().item()
+
+                if verbose:
+                    print(f"Right loss ({n.name if hasattr(n, 'name') else 'node'}):", total_loss / batches)
+                try:
+                    step_tensor = self.solve_system(A_out, b_out, method=method, eps=eps)
+                # _LinAlgError # if the system is singular return
+                except torch.linalg.LinAlgError:
+                    print(f"Singular system for node {n.name if hasattr(n, 'name') else 'node'}")
+                    return False
+                
+                # Permute to match node dimension order
+                broadcast_dims = tuple(d for d in self.output_labels if d not in n.dim_labels)
+                permute = [J.dim_labels[len(broadcast_dims):].index(l) for l in n.dim_labels]
+                step_tensor = step_tensor.permute(*permute)
+
+                n.update_node(step_tensor, lr=lr)
+                if orthonormalize:
+                    self.node_orthonormalize_right(n)
+                self.right_update_stacks(n)
+
+                # Convergence check after node update
+                if convergence_criterion is not None:
+                    y_trues = []
+                    y_preds = []
+                    for b in range(batches):
+                        x_batch = x[b*batch_size:(b+1)*batch_size] if isinstance(x, torch.Tensor) else [x[i][b*batch_size:(b+1)*batch_size] for i in range(len(x))]
+                        y_batch = y_true[b*batch_size:(b+1)*batch_size]
+
+                        y_pred = self.forward(x_batch).permute_first(*self.output_labels).tensor
+                        y_trues.append(y_batch)
+                        y_preds.append(y_pred)
+                    y_trues = torch.cat(y_trues, dim=0)
+                    y_preds = torch.cat(y_preds, dim=0)
+                    if convergence_criterion(y_preds, y_trues):
+                        print('Converged (right pass)')
+                        return True
+
+        return False
 
     def orthonormalize_left(self):
         """
