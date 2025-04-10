@@ -1,8 +1,8 @@
 import torch
 import string
 from collections import deque
-from tensor_node import TensorNode
-from tensor_utils import tensor_gradient_solver
+from tensor.node import TensorNode
+from tensor.utils import tensor_gradient_solver
 
 class TensorNetwork:
     def __init__(self, input_nodes, main_nodes, output_labels=('s',), sample_dim='s'):
@@ -139,7 +139,7 @@ class TensorNetwork:
             contracted = contracted.contract_with(previous_stack, connect_labels)
         self.right_stacks[node] = contracted
 
-    def step(self, node, d_loss, dd_loss, lr=1.0, method='exact', eps=0.0, clip_value=None):
+    def step(self, node, d_loss, dd_loss, lr=1.0, method='exact', eps=0.0):
         """Finds the update step for a given node"""
 
         # Determine broadcast

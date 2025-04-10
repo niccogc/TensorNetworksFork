@@ -1,5 +1,5 @@
 import torch
-from tensor_node import TensorNode
+from tensor.node import TensorNode
 import string
 
 def tensor_gradient_solver(J, d_loss, sqd_loss, broadcast_dims, r=2, ridge_eps=0.0):

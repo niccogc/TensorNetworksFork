@@ -3,7 +3,9 @@ import os
 os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 import torch
 torch.set_default_dtype(torch.float64)
-from tensor_net import TensorNode, TensorNetwork, TensorNetworkLayer
+from tensor.node import TensorNode
+from tensor.network import TensorNetwork
+from tensor.layers import TensorNetworkLayer
 
 A1 = TensorNode((1, 784, 3, 11), ['b0', 'w', 'b1', 'p'], name='A1', l='b0', r='b1')
 A2 = TensorNode((3, 1, 40, 11), ['b1', 'c', 'b2', 'p'], name='A2', l='b1', r='b2')
@@ -34,7 +36,7 @@ latents = torch.load("./latents/test_latents.pt").cuda()
 labels = torch.load("./latents/test_labels.pt").cuda()
 # %%
 import torch
-from BregmanLoss import Square2DBregFunction
+from tensor.bregman import Square2DBregFunction
 data = torch.cat([torch.ones(latents.size(0), 1, device=latents.device), latents], dim=-1)
 
 # Define Bregman function

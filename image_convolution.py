@@ -26,8 +26,8 @@ xinp_train = torch.cat((xinp_train, torch.ones((xinp_train.shape[0], 1, xinp_tra
 y_train = F.one_hot(y_train, num_classes=10).to(dtype=torch.float64)
 
 # %%
-from tensor_layers import TensorConvolutionTrainLayer
-from BregmanLoss import KLDivBregman
+from tensor.layers import TensorConvolutionTrainLayer
+from tensor.bregman import KLDivBregman
 N = 2
 r = 3
 

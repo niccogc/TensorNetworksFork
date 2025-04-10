@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
-from tensor_network import TensorNetwork
-from tensor_node import TensorNode
+from tensor.network import TensorNetwork
+from tensor.node import TensorNode
 
 class TensorNetworkLayer(nn.Module):
     def __init__(self, tensor_network: TensorNetwork, labels=None):

@@ -36,8 +36,8 @@ xinp_train = torch.cat([torch.ones(X_train.shape[0], 1, dtype=X_train.dtype, dev
 xinp_test = torch.cat([torch.ones(X_test.shape[0], 1, dtype=X_test.dtype, device=X_test.device), X_test], dim=-1)
 
 #%%
-from tensor_layers import TensorTrainLayer
-from BregmanLoss import KLDivBregman, AutogradBregman
+from tensor.layers import TensorTrainLayer
+from tensor.bregman import KLDivBregman, AutogradBregman
 
 N = 2
 r = 2

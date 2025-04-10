@@ -3,8 +3,8 @@ import os
 os.environ['CUDA_VISIBLE_DEVICES'] = "0"
 import torch
 torch.set_default_dtype(torch.float64)
-from tensor_layers import TensorOperatorLayer
-from BregmanLoss import SquareBregFunction
+from tensor.layers import TensorOperatorLayer
+from tensor.bregman import SquareBregFunction
 
 #%%
 r = 5
