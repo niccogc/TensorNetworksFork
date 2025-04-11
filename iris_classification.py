@@ -37,50 +37,50 @@ xinp_test = torch.cat([torch.ones(X_test.shape[0], 1, dtype=X_test.dtype, device
 
 #%%
 from tensor.layers import TensorTrainLayer
-from tensor.bregman import KLDivBregman, AutogradBregman
+from tensor.bregman import KLDivBregman, AutogradBregman, XEAutogradBregman
 
 N = 2
 r = 2
 p = X.shape[1]+1
-C = y.shape[1]
+C = y.shape[1]-1
 
 # Define Bregman function
 layer = TensorTrainLayer(N, r, p, output_shape=C).cuda()
 y_pred = layer(xinp_train)
 w = 0.1*1/y_pred.std().item()
-bf = KLDivBregman(w=w)
+bf = XEAutogradBregman(w=w)
 
 #PyTorch Autograd Bregman (very unstable for now)
-forward_transform = lambda x, y: (torch.softmax(w*x, dim=-1), y) # y is already softmax (one-hot)
-phi_func = lambda x: torch.sum(torch.where(x == 0, torch.zeros_like(x), x * torch.log(x)), dim=-1, keepdim=True) #0 * log(0) = 0 assumption
-d_phi_x_func = lambda x: torch.log(x) + 1
-bf_auto = AutogradBregman(phi_func=phi_func, forward_transform=forward_transform, d_phi_x_func=d_phi_x_func)
+# forward_transform = lambda x, y: (torch.softmax(w*x, dim=-1), y) # y is already softmax (one-hot)
+# phi_func = lambda x: torch.sum(torch.where(x == 0, torch.zeros_like(x), x * torch.log(x)), dim=-1, keepdim=True) #0 * log(0) = 0 assumption
+# d_phi_x_func = lambda x: torch.log(x) + 1
+# bf_auto = AutogradBregman(phi_func=phi_func, forward_transform=forward_transform, d_phi_x_func=d_phi_x_func)
 
 def convergence_criterion(y_pred, y_true):
+    y_pred = torch.cat((y_pred, torch.zeros_like(y_pred[..., :1])), dim=-1)
     accuracy = (y_pred.argmax(dim=-1) == y_true.argmax(dim=-1)).float().mean().item()
     print("Accuracy:", accuracy)
-    return accuracy > 0.95
+    return accuracy > 0.99
 #%%
 # Test bf vs. bf_auto
-y_pred = layer(xinp_train)
-loss_auto, d_loss_auto, dd_loss_auto = bf_auto(y_pred, y_train)
-loss, d_loss, dd_loss = bf(y_pred, y_train)
-print('Loss:', loss.mean().item())
-print('Loss auto:', loss_auto.mean().item())
-print("Loss allclose:", torch.allclose(loss, loss_auto))
-print("d Loss allclose:", torch.allclose(d_loss, d_loss_auto))
-print("dd Loss allclose:", torch.allclose(dd_loss, dd_loss_auto))
+# y_pred = layer(xinp_train)
+# loss_auto, d_loss_auto, dd_loss_auto = bf_auto(y_pred, y_train)
+# loss, d_loss, dd_loss = bf(y_pred, y_train)
+# print('Loss:', loss.mean().item())
+# print('Loss auto:', loss_auto.mean().item())
+# print("Loss allclose:", torch.allclose(loss, loss_auto))
+# print("d Loss allclose:", torch.allclose(d_loss, d_loss_auto))
+# print("dd Loss allclose:", torch.allclose(dd_loss, dd_loss_auto))
 #%%
 # Train the model
-layer.tensor_network.accumulating_swipe(xinp_train, y_train, bf, lr=1.0, convergence_criterion=convergence_criterion, orthonormalize=True, method='exact', eps=1e-5, verbose=True, num_swipes=100)
+layer.tensor_network.accumulating_swipe(xinp_train, y_train, bf, lr=1.0, convergence_criterion=convergence_criterion, orthonormalize=False, method='exact', eps=1e-5, verbose=True, num_swipes=10)
 #%%
 # Calculate accuracy on train set
 y_pred_train = layer(xinp_train)
-accuracy_train = (y_pred_train.argmax(dim=-1) == y_train.argmax(dim=-1)).float().mean().item()
-print('Train Acc:', accuracy_train)
-
-# Calculate accuracy on test set
+print("Train")
+convergence_criterion(y_pred_train, y_train)
 y_pred_test = layer(xinp_test)
-accuracy_test = (y_pred_test.argmax(dim=-1) == y_test.argmax(dim=-1)).float().mean().item()
-print('Test Acc:', accuracy_test)
+print("Test")
+convergence_criterion(y_pred_test, y_test)
+None
 #%%

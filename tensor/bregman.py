@@ -1,4 +1,5 @@
 import torch
+from torch.nn import functional as F
 
 class BregFunction(torch.nn.Module):
     def transform_forward(self, x, y):
@@ -49,14 +50,44 @@ class SquareBregFunction(BregFunction):
     def dsq(self, x):
         return torch.full_like(x, 2).unsqueeze(-1)
     
-class KLDivBregman(BregFunction):
+class SoftmaxSquaredLoss(torch.nn.Module):
     def __init__(self, w=1.0):
+        super().__init__()
+        self.w = w
+
+    def forward(self, x, y):
+        z = self.w * x
+        log_s = torch.log_softmax(z, dim=-1)
+        s = log_s.exp()  # softmax(w*x)
+        diff = s - y
+
+        # --------
+        # Loss: 0.5 * ||s - y||^2
+        loss = 0.5 * (diff ** 2).sum(dim=-1, keepdim=True)
+
+        # --------
+        # Gradient: grad = w * J^T @ diff
+        # Jacobian of softmax: J = diag(s) - s outer s
+        J = torch.diag_embed(s) - torch.einsum('...i,...j->...ij', s, s)
+        grad = self.w * torch.einsum('...ij,...j->...i', J, diff)
+
+        # --------
+        # Hessian: w^2 * [J^T @ J + correction term]
+        # Approximate Hessian by just using J^T @ J (omit 3rd-order correction)
+        JTJ = torch.einsum('...ik,...jk->...ij', J, J)
+        hessian = self.w ** 2 * JTJ
+
+        return loss, grad, hessian
+    
+class KLDivBregman(BregFunction):
+    def __init__(self, w=1.0, grad_clip=1e3):
         """
         Parameters:
           w : scaling factor that is applied to the logits.
         """
         super().__init__()
         self.w = w
+        self.grad_clip = grad_clip
 
     def forward(self, x, y):
         """
@@ -69,27 +100,97 @@ class KLDivBregman(BregFunction):
             hessian : Hessian of the loss w.r.t. x
         """
         # x are the logits (un-normalized values); y is a target probability vector.
-        z = self.w * x
+        z = self.w * x # shape [..., C]
+        z = torch.cat((z, torch.zeros_like(z[..., :1])), dim=-1) # append 0 to logits
 
-        log_s = torch.log_softmax(z, dim=-1)
+        log_s = torch.log_softmax(z, dim=-1) #append 0 and softmax -> remove 0
+
+        loss = F.cross_entropy(log_s, y.argmax(dim=-1), reduction='none') # shape [..., C]
         s = log_s.exp()
+        y = y # remove the last column (corresponding to the appended 0)
 
-        phi_x = torch.sum(s * log_s, dim=-1, keepdim=True)
-        phi_y = torch.sum(torch.where(y > 0, y * torch.log(y), torch.zeros_like(y)), dim=-1, keepdim=True)
+        # phi_x = torch.sum(s * log_s, dim=-1, keepdim=True)
+        # phi_y = torch.sum(torch.where(y > 0, y * torch.log(y), torch.zeros_like(y)), dim=-1, keepdim=True)
 
-        d_phi = 1 + log_s
-        diff = y - s
+        # d_phi = 1 + log_s.clamp(min=-self.grad_clip, max=self.grad_clip)
+        # diff = y - s
         
-        inner = torch.einsum('...i,...i->...', d_phi, diff).unsqueeze(-1)
-        loss = phi_y - phi_x - inner
-
-        grad = self.w * (s - y)
-
+        # inner = torch.einsum('...i,...i->...', d_phi, diff).unsqueeze(-1)
+        # loss = phi_y - phi_x - inner
+        
         log_outer = log_s.unsqueeze(-1) + log_s.unsqueeze(-2)  # shape [..., n, n]
         outer = log_outer.exp() # s_i * s_j in a stable way
-        hessian = self.w**2 * (torch.diag_embed(s) - outer + 1e-12)
+        grad = self.w * (s - y)[..., :-1] # Exclude the last column (corresponding to the appended 0)
 
+        hessian = self.w**2 * (torch.diag_embed(s) - outer)[..., :-1, :-1] # Exclude the last row and column (corresponding to the appended 0)
         return loss, grad, hessian
+    
+class BinaryKLDivBregman(BregFunction):
+    def __init__(self, w=1.0):
+        """
+        Parameters:
+          w : scaling factor that is applied to the logits.
+        """
+        super().__init__()
+        self.w = w
+
+    def forward(self, x, y, eps=1e-12):
+        """
+        Parameters:
+          x : logits (un-normalized values)
+          y : target probability vector
+        Returns:
+            loss : KL divergence
+            grad : gradient of the loss w.r.t. x
+            hessian : Hessian of the loss w.r.t. x
+        """
+        z = self.w * x
+        s = torch.sigmoid(z)
+
+        # Prevent log(0) by clamping
+        s = s.clamp(min=eps, max=1 - eps)
+        y = y.clamp(min=eps, max=1 - eps)
+
+        # Compute KL divergence
+        kl = torch.where(
+            y > 0, y * torch.log(y / s), torch.zeros_like(y)
+        ) + torch.where(
+            y < 1, (1 - y) * torch.log((1 - y) / (1 - s)), torch.zeros_like(y)
+        )
+
+        grad = self.w * (s - y)
+        hessian = (self.w ** 2 * s * (1 - s)).unsqueeze(-1)
+
+        return kl, grad, hessian
+    
+class XEAutogradBregman(BregFunction):
+    def __init__(self, w=1.0):
+        super().__init__()
+        self.w = w
+
+    def forward(self, x, y):
+        x = x.requires_grad_(True)
+        
+        z = self.w * x # shape [..., C]
+        z = torch.cat((z, torch.zeros_like(z[..., :1])), dim=-1) # append 0 to logits
+
+        log_s = torch.log_softmax(z, dim=-1) #append 0 and softmax -> remove 0
+
+        loss = F.cross_entropy(log_s, y.argmax(dim=-1), reduction='none') # shape [..., C]
+        
+        # Gradient of loss w.r.t x
+        d_loss = torch.autograd.grad(
+            outputs=loss.sum(), inputs=x, create_graph=True, retain_graph=True
+        )[0]
+
+        # Hessian of loss w.r.t x
+        B = []
+        for i in range(d_loss.shape[-1]):
+            grad2 = torch.autograd.grad(d_loss[..., i].sum(), x, retain_graph=True, create_graph=True)[0]
+            B.append(grad2.unsqueeze(-2))
+        dd_loss = torch.cat(B, dim=-2)
+
+        return loss.detach(), d_loss.detach(), dd_loss.detach()
     
 class AutogradBregman(BregFunction):
     def __init__(self, phi_func, forward_transform=None, d_phi_x_func=None):

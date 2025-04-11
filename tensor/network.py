@@ -143,23 +143,14 @@ class TensorNetwork:
         """Finds the update step for a given node"""
 
         # Determine broadcast
-        broadcast_dims = tuple(d for d in self.output_labels if d not in node.dim_labels)
-        non_broadcast_dims = tuple(d for d in self.output_labels if d != self.sample_dim)
-
-        A, b, J = self.get_A_b(node, d_loss, dd_loss)
+        A, b = self.get_A_b(node, d_loss, dd_loss)
 
         # Solve the system
-        dim_labels = node.dim_labels
         step_tensor = self.solve_system(A, b, method=method, eps=eps)
-
-        # Permute to match node dimension order
-        permute = [J.dim_labels[len(broadcast_dims):].index(l) for l in dim_labels]
-        step_tensor = step_tensor.permute(*permute)
-
         node.update_node(step_tensor, lr=lr)
         return step_tensor
 
-    def get_A_b(self, node, d_loss, dd_loss):
+    def get_A_b(self, node, grad, hessian):
         """Finds the update step for a given node"""
 
         # Determine broadcast
@@ -167,7 +158,7 @@ class TensorNetwork:
         non_broadcast_dims = tuple(d for d in self.output_labels if d != self.sample_dim)
         
         # Compute the Jacobian
-        J = self.compute_jacobian_stack(node).expand_labels(self.output_labels, d_loss.shape).permute_first(*broadcast_dims)
+        J = self.compute_jacobian_stack(node).expand_labels(self.output_labels, grad.shape).permute_first(*broadcast_dims)
 
         # Assign unique einsum labels
         all_letters = iter(string.ascii_letters)
@@ -180,27 +171,32 @@ class TensorNetwork:
 
         J_ein1 = ''
         J_ein2 = ''
-        J_out1 = ''
-        J_out2 = ''
+        J_out1 = []
+        J_out2 = []
+        dim_order = []
         for d in J.dim_labels:
             if d not in dim_labels and d not in broadcast_dims:
                 dim_labels[d] = next(all_letters)
                 dim_labels['_' + d] = next(all_letters)
             J_ein1 += dim_labels[d]
-            J_ein2 += dim_labels['_' + d] if d not in broadcast_dims else dim_labels[d]
+            J_ein2 += dim_labels['_' + d] if d != self.sample_dim else dim_labels[d]
             if d not in broadcast_dims:
-                J_out1 += dim_labels[d]
-                J_out2 += dim_labels['_' + d]
+                J_out1.append(dim_labels[d])
+                J_out2.append(dim_labels['_' + d])
+                dim_order.append(d)
+                
+        J_out1 = ''.join([J_out1[dim_order.index(d)] for d in node.dim_labels])
+        J_out2 = ''.join([J_out2[dim_order.index(d)] for d in node.dim_labels])
 
         # Construct einsum notations
         einsum_A = f'{J_ein1},{J_ein2},{dd_loss_ein}->{J_out1}{J_out2}'
         einsum_b = f"{J_ein1},{d_loss_ein}->{J_out1}"
-
+        
         # Compute einsum operations
-        A = torch.einsum(einsum_A, J.tensor, J.tensor, dd_loss)
-        b = torch.einsum(einsum_b, J.tensor, d_loss)
+        A = torch.einsum(einsum_A, J.tensor, J.tensor, hessian)
+        b = torch.einsum(einsum_b, J.tensor, grad)
 
-        return A, b, J
+        return A, b
     
     def solve_system(self, A, b, method='exact', eps=0.0):
         """Finds the update step for a given node"""
@@ -208,7 +204,7 @@ class TensorNetwork:
         A_f = A.flatten(0, A.ndim//2-1).flatten(1, -1)
         b_f = b.flatten()
         
-        scale = A_f.abs().max().clamp(min=1e-12)
+        scale = A_f.abs().max()
         A_f = A_f / scale
         b_f = b_f / scale
 
@@ -320,7 +316,7 @@ class TensorNetwork:
                     y_pred = self.forward(x_batch).permute_first(*self.output_labels).tensor
                     loss, d_loss, sqd_loss = loss_fn.forward(y_pred, y_batch)
 
-                    A, b_vec, J = self.get_A_b(n, d_loss, sqd_loss)
+                    A, b_vec = self.get_A_b(n, d_loss, sqd_loss)
                     if A_out is None:
                         A_out = A
                         b_out = b_vec
@@ -339,11 +335,6 @@ class TensorNetwork:
                     print(f"Singular system for node {n.name if hasattr(n, 'name') else 'node'}")
                     return False
                 
-                # Permute to match node dimension order
-                broadcast_dims = tuple(d for d in self.output_labels if d not in n.dim_labels)
-                permute = [J.dim_labels[len(broadcast_dims):].index(l) for l in n.dim_labels]
-                step_tensor = step_tensor.permute(*permute)
-
                 n.update_node(step_tensor, lr=lr)
                 if orthonormalize:
                     self.node_orthonormalize_left(n)
@@ -382,7 +373,7 @@ class TensorNetwork:
                     y_pred = self.forward(x_batch).permute_first(*self.output_labels).tensor
                     loss, d_loss, sqd_loss = loss_fn.forward(y_pred, y_batch)
 
-                    A, b_vec, J = self.get_A_b(n, d_loss, sqd_loss)
+                    A, b_vec = self.get_A_b(n, d_loss, sqd_loss)
                     if A_out is None:
                         A_out = A
                         b_out = b_vec
@@ -401,11 +392,6 @@ class TensorNetwork:
                     print(f"Singular system for node {n.name if hasattr(n, 'name') else 'node'}")
                     return False
                 
-                # Permute to match node dimension order
-                broadcast_dims = tuple(d for d in self.output_labels if d not in n.dim_labels)
-                permute = [J.dim_labels[len(broadcast_dims):].index(l) for l in n.dim_labels]
-                step_tensor = step_tensor.permute(*permute)
-
                 n.update_node(step_tensor, lr=lr)
                 if orthonormalize:
                     self.node_orthonormalize_right(n)
