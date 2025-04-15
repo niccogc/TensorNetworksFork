@@ -33,7 +33,7 @@ class TensorNetworkLayer(nn.Module):
         return tn_out.tensor
 
 class TensorTrainLayer(TensorNetworkLayer):
-    def __init__(self, num_carriages, bond_dim, input_features, output_shape, ring=False):
+    def __init__(self, num_carriages, bond_dim, input_features, output_shape=tuple(), ring=False, squeeze=True):
         """Initializes a TensorTrainLayer."""
         self.num_carriages = num_carriages
         self.bond_dim = bond_dim
@@ -76,13 +76,16 @@ class TensorTrainLayer(TensorNetworkLayer):
                     right = bond_dim
             node = TensorNode((left, up, down, right), [left_label, up_label, 'p', right_label], l=left_label, r=right_label, name=f"A{i}")
             if i > 1:
-                self.nodes[-1].connect(node, left_label)
+                self.nodes[-1].connect(node, left_label, priority=1)
             if ring and i == num_carriages:
-                node.connect(self.nodes[0], right_label)
-            node.connect(self.x_nodes[i-1], 'p')
-            node.squeeze()
+                node.connect(self.nodes[0], right_label, priority=0)
+            node.connect(self.x_nodes[i-1], 'p', priority=2)
             self.nodes.append(node)
-
+        
+        # Squeeze singleton dimensions
+        if squeeze:
+            for node in self.nodes:
+                node.squeeze(self.labels)
         # Create a TensorNetwork
         tensor_network = TensorNetwork(self.x_nodes, self.nodes, output_labels=self.labels)
         super(TensorTrainLayer, self).__init__(tensor_network)

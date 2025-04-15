@@ -47,10 +47,10 @@ xinput = [xinp[:, i] for i in range(len(layer.tensor_network.input_nodes))]
 with torch.inference_mode():
     layer.tensor_network.accumulating_swipe(xinput, y, bf, verbose=True)
 #%%
-layer.tensor_network.disconnect(layer.tensor_network.input_nodes) # Make this one virtual by returning a virtual tensor network
+train_network = layer.tensor_network.disconnect(layer.tensor_network.input_nodes) # Make this one virtual by returning a virtual tensor network
 #%%
-layer.tensor_network.recompute_all_stacks()
-out = layer.tensor_network.forward(xinput)
+train_network.recompute_all_stacks()
+out = train_network.forward(xinput)
 # %%
 print(out.tensor[*out.tensor.nonzero(as_tuple=True)])
 print(out.tensor.nonzero())

@@ -5,6 +5,7 @@ import torch
 torch.set_default_dtype(torch.float64)
 from tensor.layers import TensorOperatorLayer
 from tensor.bregman import SquareBregFunction
+from tensor.utils import visualize_tensornetwork
 
 #%%
 r = 5
@@ -39,12 +40,19 @@ xinp = xinp.cuda()
 with torch.inference_mode():
     layer.tensor_network.swipe(xinp, y, bf, verbose=True)
 #%%
-layer.tensor_network.disconnect(layer.tensor_network.input_nodes) # Make this one virtual by returning a virtual tensor network
+train_network = layer.tensor_network.disconnect(layer.tensor_network.input_nodes) # Make this one virtual by returning a virtual tensor network
 #%%
-layer.tensor_network.recompute_all_stacks()
-out = layer.tensor_network.forward(xinp)
+train_network.recompute_all_stacks()
+out = train_network.forward(xinp)
 # %%
 print(out.tensor[*out.tensor.nonzero(as_tuple=True)])
 print(out.tensor.nonzero())
 print(out.tensor.nonzero().sum(1).max())
+#%%
+
+# Visualize the tensor network
+def visualize_cum_sum_operator():
+    visualize_tensornetwork(layer.tensor_network, layout='grid')
+
+visualize_cum_sum_operator()
 #%%

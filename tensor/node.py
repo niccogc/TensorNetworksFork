@@ -1,5 +1,6 @@
 import torch
 import string
+from collections import defaultdict
 
 class TensorNode:
     def __init__(self, tensor_or_shape, dim_labels, l=None, r=None, name=None):
@@ -13,10 +14,11 @@ class TensorNode:
         self.right_labels = [r] if isinstance(r, str) else (r or [])
         self.name = name or ''
         self.connections = {}
+        self.connection_priority = defaultdict(float)
         self.contracted = set()
 
     def contract_with(self, other_node, contract_labels):
-        """Contracts self with other_node over given dimensions."""
+        """Contracts self with other_node over given dimensions, transferring priorities."""
         contract_labels = [contract_labels] if isinstance(contract_labels, str) else contract_labels
 
         # Generate Einstein summation notation
@@ -41,12 +43,21 @@ class TensorNode:
         if not other_node.contracted:
             node.contracted.add(other_node)
 
-        # Set connections in the new node
+        # Set connections in the new node, transferring priorities
         for label, connected_node in self.connections.items():
             if connected_node not in node.contracted:
+                if label in node.connections:
+                    node.connection_priority[label] = max(node.connection_priority[label], self.connection_priority[label])
+                else:
+                    node.connection_priority[label] = self.connection_priority[label]
                 node.connections[label] = connected_node
+
         for label, connected_node in other_node.connections.items():
             if connected_node not in node.contracted:
+                if label in node.connections:
+                    node.connection_priority[label] = max(node.connection_priority[label], other_node.connection_priority[label])
+                else:
+                    node.connection_priority[label] = other_node.connection_priority[label]
                 node.connections[label] = connected_node
 
         return node
@@ -61,11 +72,21 @@ class TensorNode:
         self.tensor = self.tensor.to(device=device, dtype=dtype)
         return self
 
-    def connect(self, other_node, labels):
-        """Connects this node to another node with the given labels."""
+    def connect(self, other_node, labels, priority=float("-inf")):
+        """Connects this node to another node with the given labels and priority."""
         labels = [labels] if isinstance(labels, str) else list(labels)
         for label in labels:
+            if label in self.connections:
+                # Update priority if the new priority is higher
+                self.connection_priority[label] = max(self.connection_priority[label], priority)
+            else:
+                self.connection_priority[label] = priority
             self.connections[label] = other_node
+
+            if label in other_node.connections:
+                other_node.connection_priority[label] = max(other_node.connection_priority[label], priority)
+            else:
+                other_node.connection_priority[label] = priority
             other_node.connections[label] = self
 
     def get_connecting_labels(self, other_node, horizontal=True):
@@ -104,13 +125,16 @@ class TensorNode:
         return self
 
     def contract_vertically(self, exclude=set()):
-        """Contracts all non-left/right connections iteratively."""
+        """Contracts all non-left/right connections iteratively, prioritizing high-priority connections."""
         contracted = self
         contraction_queue = [self]
 
         while contraction_queue:
             current = contraction_queue.pop(0)
-            for label, next_node in list(current.connections.items()):
+            # Sort connections by priority (descending)
+            sorted_connections = sorted(current.connections.items(), key=lambda item: current.connection_priority[item[0]], reverse=True)
+
+            for label, next_node in sorted_connections:
                 if next_node in exclude:
                     continue
 

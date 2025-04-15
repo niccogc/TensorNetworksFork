@@ -1,57 +1,74 @@
-import torch
-from tensor.node import TensorNode
-import string
+import networkx as nx
+import matplotlib.pyplot as plt
 
-def tensor_gradient_solver(J, d_loss, sqd_loss, broadcast_dims, r=2, ridge_eps=0.0):
-    """Solves for the gradient using tensor decomposition."""
-    bond_labels = [l for l in J.dim_labels if l not in broadcast_dims]
-    x_blocks = []
-    for i, l in enumerate(bond_labels):
-        x_block = TensorNode((1 if i == 0 else r, J.dim_size(l), 1 if i == len(bond_labels) - 1 else r), [f'<TB>{i}', l, f'<TB>{i+1}'], name=f'X{i}')
-        x_blocks.append(x_block)
-        x_block.squeeze()
+def visualize_tensornetwork(tensornetwork, layout='grid'):
+    """
+    Visualize the tensornetwork as a graph.
 
-    for i, block in enumerate(x_blocks):
-        # Precalculate blocks
-        X_gradient = J
-        for b2 in x_blocks:
-            if b2 != block:
-                X_gradient = X_gradient.contract_with(b2, list(set(X_gradient.dim_labels).intersection(b2.dim_labels)))
-        JJ = J.contract_with(J, [l for l in J.dim_labels if l not in broadcast_dims])
-        
-        # Create dummy dimensions and define order of labels
-        right_label_order = [l for l in X_gradient.dim_labels if l not in broadcast_dims]
-        JJ_gradient = JJ.contract_with(X_gradient, []).permute_first(*right_label_order)
-        left_label_order = [f"_{l}" for l in right_label_order]
+    Parameters:
+        tensornetwork: The tensor network object containing nodes and edges.
+        layout: The layout for visualization. Options are 'grid', 'horizontal', or 'vertical'.
+    """
+    G = nx.DiGraph()
 
-        # Calculate the left-hand side
-        X_gradient_transpose = X_gradient.get_transposed_node(set(broadcast_dims))
-        A_side = JJ_gradient.contract_with(X_gradient_transpose, [])
-        A_side.permute_first(*left_label_order, *right_label_order)
+    # Add nodes with their shapes and names
+    for node in tensornetwork.nodes:
+        G.add_node(node.name, shape=node.shape)
 
-        A = A_side.tensor
-        b = JJ_gradient.tensor
+    # Add edges with sizes
+    for node in tensornetwork.nodes:
+        for label, connected_node in node.connections.items():
+            size = node.dim_size(label)  # Use the dim_size method to get the size of the dimension
+            G.add_edge(node.name, connected_node.name, size=size)
 
-        # Einsum with the loss derivatives
-        broad_dims = string.ascii_letters[:len(broadcast_dims)]
-        A_ein_str = f'...{broad_dims},{broad_dims}->...'
-        b_ein_str = f'...{broad_dims},{broad_dims},{broad_dims}->...'
-        A = torch.einsum(A_ein_str, A, sqd_loss)
-        b = torch.einsum(b_ein_str, b, d_loss, sqd_loss)
+    # Traverse the network to determine positions
+    pos = {}
+    visited = set()
 
-        original_shape = b.shape
+    def traverse_and_position(node, x, y):
+        if node.name in visited:
+            return
+        visited.add(node.name)
+        pos[node.name] = (x, y)
 
-        A_f = A.flatten(0, A.ndim//2-1).flatten(1, -1)
-        b_f = b.flatten()
+        # Traverse left connections
+        left_x = x - 1
+        for left_label in node.left_labels:
+            if left_label in node.connections:
+                traverse_and_position(node.connections[left_label], left_x, y)
+                left_x -= 1
 
-        A_f = A_f + ridge_eps * torch.eye(A_f.shape[-1], dtype=A_f.dtype, device=A_f.device)
+        # Traverse right connections
+        right_x = x + 1
+        for right_label in node.right_labels:
+            if right_label in node.connections:
+                traverse_and_position(node.connections[right_label], right_x, y)
+                right_x += 1
 
-        x = torch.linalg.solve(A_f, b_f)
-        x_blocks[i] = TensorNode(x.reshape(original_shape), right_label_order, name=f'X{i}')
-        x_blocks[i].squeeze()
+        # Traverse other connections vertically
+        up_y = y + 1
+        for label, connected_node in node.connections.items():
+            if label not in node.left_labels + node.right_labels:
+                traverse_and_position(connected_node, x, up_y)
+                up_y += 1
 
-    # Contract each block
-    contracted = x_blocks[0]
-    for block in x_blocks[1:]:
-        contracted = contracted.contract_with(block, list(set(contracted.dim_labels).intersection(block.dim_labels)))
-    return contracted
+    # Start traversal from main nodes
+    x_offset = 0
+    for main_node in tensornetwork.main_nodes:
+        traverse_and_position(main_node, x_offset, 0)
+        x_offset += 2
+
+    # Draw the graph
+    plt.figure(figsize=(6, 6))
+    nx.draw(G, pos, with_labels=False, node_size=3000, node_color='lightblue', font_size=10, font_weight='bold')
+
+    # Add node labels for shapes and names
+    labels = {node: f"{node}\n{tuple(G.nodes[node]['shape'])}" for node in G.nodes}  # Display both name and shape as a tuple
+    nx.draw_networkx_labels(G, pos, labels=labels, font_size=12)  # Increase font size for better visibility
+
+    # Add edge labels for sizes
+    edge_labels = {(u, v): f"{d['size']}" for u, v, d in G.edges(data=True)}
+    nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_size=10)  # Increased font size for edge labels
+
+    plt.title("Tensor Network Visualization")
+    plt.show()

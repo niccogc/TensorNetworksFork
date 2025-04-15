@@ -241,16 +241,35 @@ class TensorNetwork:
         return was_updated
     
     def disconnect(self, nodes):
-        """Disconnects the given node from the network."""
+        """Creates a new TensorNetwork without the given nodes and their connections.
+        The nodes themselves are virtual copies with their own connections dictionary.
+        Only the underlying tensors are carried over."""
         if not isinstance(nodes, list) and not isinstance(nodes, tuple):
             nodes = [nodes]
-        for n_rem in nodes:
-            for n in self.nodes:
-                if n_rem in n.connections.values():
-                    for l in n.get_connecting_labels(n_rem):
-                        del n_rem.connections[l]
-                        del n.connections[l]
-            self.nodes.remove(n_rem)
+
+        # Create a mapping of old nodes to new virtual copies
+        node_mapping = {}
+        for node in self.nodes:
+            if node not in nodes:
+                # Create a virtual copy of the node with the same tensor
+                new_node = TensorNode(node.tensor, node.dim_labels, l=node.left_labels, r=node.right_labels, name=node.name)
+                node_mapping[node] = new_node
+
+        # Recreate connections in the new virtual nodes
+        for old_node, new_node in node_mapping.items():
+            for label, connected_node in old_node.connections.items():
+                if connected_node in node_mapping:  # Only add connections to nodes that are not being removed
+                    new_node.connections[label] = node_mapping[connected_node]
+                    new_node.connection_priority[label] = old_node.connection_priority[label]
+
+        # Create new input and main nodes lists
+        new_input_nodes = [node_mapping[node] for node in self.input_nodes if node in node_mapping]
+        new_main_nodes = [node_mapping[node] for node in self.main_nodes if node in node_mapping]
+
+        # Create a new TensorNetwork object
+        new_network = TensorNetwork(new_input_nodes, new_main_nodes, self.output_labels, self.sample_dim)
+
+        return new_network
 
     def swipe(self, x, y_true, loss_fn, method='exact', eps=1e-12, num_swipes=1, lr=1.0, convergence_criterion=None, orthonormalize=False, verbose=False, skip_right=False):
         """Swipes the network to minimize the loss function."""
