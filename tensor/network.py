@@ -320,22 +320,28 @@ class TensorNetwork:
         """Swipes the network to minimize the loss using accumulated A and b over mini-batches."""
 
         data_size = len(x) if isinstance(x, torch.Tensor) else x[0].shape[0]
+        if batch_size <= 0:
+            batch_size = data_size
         batches = (data_size + batch_size - 1) // batch_size # round up division
 
+        node_l2r = None
+        node_r2l = None
         for _ in range(num_swipes):
             # LEFT TO RIGHT
-            for n in self.main_nodes:
+            for node_l2r in self.main_nodes:
+                if node_l2r is node_r2l:
+                    continue
                 A_out, b_out = None, None
                 total_loss = 0.0
 
-                for b in tqdm(range(batches), desc=f"Left to right pass ({n.name if hasattr(n, 'name') else 'node'})", disable=not verbose):
+                for b in tqdm(range(batches), desc=f"Left to right pass ({node_l2r.name if hasattr(node_l2r, 'name') else 'node'})", disable=verbose < 2):
                     x_batch = x[b*batch_size:(b+1)*batch_size] if isinstance(x, torch.Tensor) else [x[i][b*batch_size:(b+1)*batch_size] for i in range(len(x))]
                     y_batch = y_true[b*batch_size:(b+1)*batch_size]
 
                     y_pred = self.forward(x_batch).permute_first(*self.output_labels).tensor
                     loss, d_loss, sqd_loss = loss_fn.forward(y_pred, y_batch)
 
-                    A, b_vec = self.get_A_b(n, d_loss, sqd_loss)
+                    A, b_vec = self.get_A_b(node_l2r, d_loss, sqd_loss)
                     if A_out is None:
                         A_out = A
                         b_out = b_vec
@@ -346,18 +352,18 @@ class TensorNetwork:
                     total_loss += loss.mean().item()
 
                 if verbose:
-                    print(f"Left loss ({n.name if hasattr(n, 'name') else 'node'}):", total_loss / batches)
+                    print(f"Left loss ({node_l2r.name if hasattr(node_l2r, 'name') else 'node'}):", total_loss / batches)
                 try:
                     step_tensor = self.solve_system(A_out, b_out, method=method, eps=eps)
                 # _LinAlgError # if the system is singular return
                 except torch.linalg.LinAlgError:
-                    print(f"Singular system for node {n.name if hasattr(n, 'name') else 'node'}")
+                    print(f"Singular system for node {node_l2r.name if hasattr(node_l2r, 'name') else 'node'}")
                     return False
                 
-                n.update_node(step_tensor, lr=lr)
+                node_l2r.update_node(step_tensor, lr=lr)
                 if orthonormalize:
-                    self.node_orthonormalize_left(n)
-                self.left_update_stacks(n)
+                    self.node_orthonormalize_left(node_l2r)
+                self.left_update_stacks(node_l2r)
 
                 # Convergence check after node update
                 if convergence_criterion is not None:
@@ -381,18 +387,20 @@ class TensorNetwork:
                 continue
 
             # RIGHT TO LEFT
-            for n in reversed(self.main_nodes):
+            for node_r2l in reversed(self.main_nodes):
+                if node_r2l is node_l2r:
+                    continue
                 A_out, b_out = None, None
                 total_loss = 0.0
 
-                for b in tqdm(range(batches), desc=f"Right to left pass ({n.name if hasattr(n, 'name') else 'node'})", disable=not verbose):
+                for b in tqdm(range(batches), desc=f"Right to left pass ({node_r2l.name if hasattr(node_r2l, 'name') else 'node'})", disable=verbose < 2):
                     x_batch = x[b*batch_size:(b+1)*batch_size] if isinstance(x, torch.Tensor) else [x[i][b*batch_size:(b+1)*batch_size] for i in range(len(x))]
                     y_batch = y_true[b*batch_size:(b+1)*batch_size]
 
                     y_pred = self.forward(x_batch).permute_first(*self.output_labels).tensor
                     loss, d_loss, sqd_loss = loss_fn.forward(y_pred, y_batch)
 
-                    A, b_vec = self.get_A_b(n, d_loss, sqd_loss)
+                    A, b_vec = self.get_A_b(node_r2l, d_loss, sqd_loss)
                     if A_out is None:
                         A_out = A
                         b_out = b_vec
@@ -403,18 +411,18 @@ class TensorNetwork:
                     total_loss += loss.mean().item()
 
                 if verbose:
-                    print(f"Right loss ({n.name if hasattr(n, 'name') else 'node'}):", total_loss / batches)
+                    print(f"Right loss ({node_r2l.name if hasattr(node_r2l, 'name') else 'node'}):", total_loss / batches)
                 try:
                     step_tensor = self.solve_system(A_out, b_out, method=method, eps=eps)
                 # _LinAlgError # if the system is singular return
                 except torch.linalg.LinAlgError:
-                    print(f"Singular system for node {n.name if hasattr(n, 'name') else 'node'}")
+                    print(f"Singular system for node {node_r2l.name if hasattr(node_r2l, 'name') else 'node'}")
                     return False
                 
-                n.update_node(step_tensor, lr=lr)
+                node_r2l.update_node(step_tensor, lr=lr)
                 if orthonormalize:
-                    self.node_orthonormalize_right(n)
-                self.right_update_stacks(n)
+                    self.node_orthonormalize_right(node_r2l)
+                self.right_update_stacks(node_r2l)
 
                 # Convergence check after node update
                 if convergence_criterion is not None:
