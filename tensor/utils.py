@@ -1,5 +1,6 @@
 import networkx as nx
 import matplotlib.pyplot as plt
+from collections import deque
 
 def visualize_tensornetwork(tensornetwork, layout='grid'):
     """
@@ -25,38 +26,26 @@ def visualize_tensornetwork(tensornetwork, layout='grid'):
     pos = {}
     visited = set()
 
-    def traverse_and_position(node, x, y):
-        if node.name in visited:
-            return
-        visited.add(node.name)
-        pos[node.name] = (x, y)
+    def traverse_and_position(main_nodes):
+        # Assign x-positions based on main nodes
+        for i, node in enumerate(main_nodes):
+            pos[node.name] = (i * 2, 0)  # Main nodes are spaced horizontally
+            visited.add(node.name)
 
-        # Traverse left connections
-        left_x = x - 1
-        for left_label in node.left_labels:
-            if left_label in node.connections:
-                traverse_and_position(node.connections[left_label], left_x, y)
-                left_x -= 1
+        # Traverse non-horizontal connections to determine y-positions
+        queue = deque(main_nodes)
+        while queue:
+            node = queue.popleft()
+            x, y = pos[node.name]
 
-        # Traverse right connections
-        right_x = x + 1
-        for right_label in node.right_labels:
-            if right_label in node.connections:
-                traverse_and_position(node.connections[right_label], right_x, y)
-                right_x += 1
-
-        # Traverse other connections vertically
-        up_y = y + 1
-        for label, connected_node in node.connections.items():
-            if label not in node.left_labels + node.right_labels:
-                traverse_and_position(connected_node, x, up_y)
-                up_y += 1
+            for label, connected_node in node.connections.items():
+                if connected_node.name not in visited and not node.is_horizontal_bond(label):
+                    visited.add(connected_node.name)
+                    pos[connected_node.name] = (x, y - 1)  # Shift vertically for non-horizontal connections
+                    queue.append(connected_node)
 
     # Start traversal from main nodes
-    x_offset = 0
-    for main_node in tensornetwork.main_nodes:
-        traverse_and_position(main_node, x_offset, 0)
-        x_offset += 2
+    traverse_and_position(tensornetwork.main_nodes)
 
     # Draw the graph
     plt.figure(figsize=(6, 6))

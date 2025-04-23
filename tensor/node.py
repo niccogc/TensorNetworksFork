@@ -109,6 +109,10 @@ class TensorNode:
     def dim_size(self, label):
         """Returns the size of the dimension corresponding to the given label."""
         return self.tensor.shape[self.dim_labels.index(label)]
+    
+    def is_horizontal_bond(self, label):
+        """Checks if the given label is a horizontal bond."""
+        return label in self.left_labels or label in self.right_labels
 
     def squeeze(self, exclude=set()):
         """Squeezes the tensor and removes singleton dimensions."""

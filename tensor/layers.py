@@ -31,6 +31,10 @@ class TensorNetworkLayer(nn.Module):
         if self.labels is not None:
             tn_out.permute_first(*self.labels)
         return tn_out.tensor
+    
+    def num_parameters(self):
+        """Returns the number of parameters in the layer."""
+        return sum(p.tensor.numel() for p in self.tensor_network.train_nodes)
 
 class TensorTrainLayer(TensorNetworkLayer):
     def __init__(self, num_carriages, bond_dim, input_features, output_shape=tuple(), ring=False, squeeze=True):
@@ -178,7 +182,7 @@ class TensorOperatorLayer(TensorNetworkLayer):
 
 
 class TensorConvolutionTrainLayer(TensorNetworkLayer):
-    def __init__(self, num_carriages, bond_dim, num_patches, patch_pixels, output_shape, ring=False):
+    def __init__(self, num_carriages, bond_dim, num_patches, patch_pixels, output_shape, ring=False, convolution_bond=-1):
         """Initializes a TensorConvolutionTrainLayer."""
         if ring:
             raise NotImplementedError("Ring structure is not implemented for TensorConvolutionTrainLayer.")
@@ -187,6 +191,7 @@ class TensorConvolutionTrainLayer(TensorNetworkLayer):
         self.num_patches = num_patches
         self.output_shape = output_shape if isinstance(output_shape, tuple) else (output_shape,)
         self.ring = ring
+        self.convolution_bond = convolution_bond
 
         self.output_labels = ('s',)
 
@@ -196,29 +201,42 @@ class TensorConvolutionTrainLayer(TensorNetworkLayer):
         train_blocks = []
         for i in range(1, num_carriages+1):
             x_node = TensorNode((1, num_patches, patch_pixels), ['s', 'patches', 'patch_pixels'], name=f"X{i}")
-            conv_block = TensorNode((patch_pixels,), ['patch_pixels'], name=f"C{i}")
+            if convolution_bond > 0:
+                conv_block = TensorNode((convolution_bond if i != 1 else 1, patch_pixels, convolution_bond if i != num_carriages else 1), [f'CB{i}', 'patch_pixels', f'CB{i+1}'], l=f'CB{i}', r=f'CB{i+1}', name=f"C{i}")
+            else:
+                conv_block = TensorNode((patch_pixels,), ['patch_pixels'], name=f"C{i}")
             train_block = TensorNode((bond_dim if i != 1 else 1, self.output_shape[i-1] if i <= len(self.output_shape) else 1, num_patches, bond_dim if i != num_carriages else 1), [f'r{i}', f'c{i}', 'patches', f'r{i+1}'], l=f'r{i}', r=f'r{i+1}', name=f"A{i}")
             x_nodes.append(x_node)
             conv_blocks.append(conv_block)
             train_blocks.append(train_block)
-            if i < len(self.output_shape)-1:
+            if i < len(self.output_shape)+1:
                 self.output_labels = self.output_labels + (f'c{i}',)
         
         self.nodes = []
-        for xn, cb, tb in zip(x_nodes, conv_blocks, train_blocks):
-            cb.connect(xn, 'patch_pixels')
+        for i, (xn, cb, tb) in enumerate(zip(x_nodes, conv_blocks, train_blocks)):
             xn.connect(tb, 'patches')
+            cb.connect(xn, 'patch_pixels')
             self.nodes.append(cb)
             self.nodes.append(tb)
         
         for i in range(1, num_carriages):
             train_blocks[i-1].connect(train_blocks[i], f'r{i+1}')
 
-        #for n in train_blocks:
-            #n.squeeze()
+        if convolution_bond > 0:
+            for i in range(1, num_carriages):
+                conv_blocks[i-1].connect(conv_blocks[i], f'CB{i+1}')
+        
+
+        for n in train_blocks:
+            n.squeeze()
+
+        for n in conv_blocks:
+            n.squeeze()
         
         # Create a TensorNetwork
         self.x_nodes = x_nodes
+        self.conv_blocks = conv_blocks
+        self.train_blocks = train_blocks
         self.labels = self.output_labels
-        tensor_network = TensorNetwork(x_nodes, train_blocks, output_labels=self.labels)
+        tensor_network = TensorNetwork(x_nodes, train_blocks, self.nodes, output_labels=self.labels)
         super(TensorConvolutionTrainLayer, self).__init__(tensor_network)

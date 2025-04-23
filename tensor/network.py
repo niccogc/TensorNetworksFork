@@ -5,17 +5,18 @@ from tensor.node import TensorNode
 from tqdm.auto import tqdm
 
 class TensorNetwork:
-    def __init__(self, input_nodes, main_nodes, output_labels=('s',), sample_dim='s'):
+    def __init__(self, input_nodes, main_nodes, train_nodes=None, output_labels=('s',), sample_dim='s'):
         """Initializes a TensorNetwork with ordered input and main nodes."""
         self.input_nodes = input_nodes
         self.main_nodes = main_nodes
-        self.node_indices = {node: i for i, node in enumerate(main_nodes)}
-        self.nodes = self._discover_nodes()
+        self.train_nodes = main_nodes if train_nodes is None else train_nodes
+        #self.node_indices = {node: i for i, node in enumerate(main_nodes)}
         self.left_stacks = None
         self.right_stacks = None
         self.output_labels = output_labels
         self.sample_dim = sample_dim
-
+        self.nodes, self.node_indices = self._discover_nodes()
+    
     def cuda(self):
         """Moves all tensors to the GPU."""
         for node in self.nodes:
@@ -30,17 +31,20 @@ class TensorNetwork:
 
     def _discover_nodes(self):
         """Uses BFS to find all connected nodes from input and main nodes."""
-        discovered = set(self.input_nodes) | set(self.main_nodes)
-        queue = deque(discovered)
+        node_indices = {node: i for i, node in enumerate(self.main_nodes)}
+        discovered = set(self.main_nodes)
+        queue = deque(self.main_nodes)
 
         while queue:
             node = queue.popleft()
-            for connected_node in node.connections.values():
-                if connected_node not in discovered:
+            current_index = node_indices[node]
+            for label, connected_node in node.connections.items():
+                if connected_node not in discovered and not node.is_horizontal_bond(label):
                     discovered.add(connected_node)
                     queue.append(connected_node)
+                    node_indices[connected_node] = current_index
 
-        return list(sorted(discovered, key=lambda n: n.name))
+        return list(sorted(discovered, key=lambda n: n.name)), node_indices
 
     def compute_stack(self, direction="left", exclude_nodes=set()):
         """Computes left or right stacks iteratively."""
@@ -265,56 +269,12 @@ class TensorNetwork:
         # Create new input and main nodes lists
         new_input_nodes = [node_mapping[node] for node in self.input_nodes if node in node_mapping]
         new_main_nodes = [node_mapping[node] for node in self.main_nodes if node in node_mapping]
+        new_train_nodes = [node_mapping[node] for node in self.train_nodes if node in node_mapping]
 
         # Create a new TensorNetwork object
-        new_network = TensorNetwork(new_input_nodes, new_main_nodes, self.output_labels, self.sample_dim)
+        new_network = TensorNetwork(new_input_nodes, new_main_nodes, new_train_nodes, self.output_labels, self.sample_dim)
 
         return new_network
-
-    def swipe(self, x, y_true, loss_fn, method='exact', eps=1e-12, num_swipes=1, lr=1.0, convergence_criterion=None, orthonormalize=False, verbose=False, skip_right=False):
-        """Swipes the network to minimize the loss function."""
-        y_pred = self.forward(x).permute_first(*self.output_labels).tensor
-        loss, d_loss, sqd_loss = loss_fn.forward(y_pred, y_true)
-        if verbose:
-            print('Initial loss:', loss.mean().item())
-        converged = False
-        for _ in range(num_swipes):
-            for n in self.main_nodes:
-                self.step(n, d_loss, sqd_loss, lr=lr, method=method, eps=eps)
-                if orthonormalize:
-                    self.node_orthonormalize_left(n)
-                self.left_update_stacks(n)
-
-                y_pred = self.forward(x).permute_first(*self.output_labels).tensor
-
-                loss, d_loss, sqd_loss = loss_fn.forward(y_pred, y_true)
-                if verbose:
-                    print('Full loss:', loss.mean().item())
-                if convergence_criterion is not None and convergence_criterion(y_pred, y_true):
-                    print('Converged')
-                    converged = True
-                    break
-            if converged:
-                break
-            if skip_right:
-                continue
-            for n in reversed(self.main_nodes):
-                self.step(n, d_loss, sqd_loss, lr=lr, method=method, eps=eps)
-                if orthonormalize:
-                    self.node_orthonormalize_right(n)
-                self.right_update_stacks(n)
-                
-                y_pred = self.forward(x).permute_first(*self.output_labels).tensor
-
-                loss, d_loss, sqd_loss = loss_fn.forward(y_pred, y_true)
-                if verbose:
-                    print('Full loss:', loss.mean().item())
-                if convergence_criterion is not None and convergence_criterion(y_pred, y_true):
-                    print('Converged')
-                    converged = True
-                    break
-            if converged:
-                break
 
     def accumulating_swipe(self, x, y_true, loss_fn, batch_size=1, method='exact', eps=1e-12, num_swipes=1, lr=1.0, convergence_criterion=None, orthonormalize=False, verbose=False, skip_right=False):
         """Swipes the network to minimize the loss using accumulated A and b over mini-batches."""
@@ -328,8 +288,8 @@ class TensorNetwork:
         node_r2l = None
         for _ in range(num_swipes):
             # LEFT TO RIGHT
-            for node_l2r in self.main_nodes:
-                if node_l2r is node_r2l:
+            for node_l2r in self.train_nodes:
+                if node_l2r in self.node_indices and node_r2l in self.node_indices and self.node_indices[node_l2r] == self.node_indices[node_r2l]:
                     continue
                 A_out, b_out = None, None
                 total_loss = 0.0
@@ -387,8 +347,8 @@ class TensorNetwork:
                 continue
 
             # RIGHT TO LEFT
-            for node_r2l in reversed(self.main_nodes):
-                if node_r2l is node_l2r:
+            for node_r2l in reversed(self.train_nodes):
+                if node_l2r in self.node_indices and node_r2l in self.node_indices and self.node_indices[node_l2r] == self.node_indices[node_r2l]:
                     continue
                 A_out, b_out = None, None
                 total_loss = 0.0
