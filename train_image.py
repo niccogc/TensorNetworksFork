@@ -62,7 +62,7 @@ def get_data_loaders(dataset_name, batch_size, kernel_size, stride, download, da
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
     return train_loader, test_loader, ds['num_classes']
 
-def preprocess_batches(loader, num_classes, kernel_size, stride, device):
+def preprocess_batches(loader, num_classes, kernel_size, stride, device, padding=0):
     samples = []
     labels = []
     for images, lbls in loader:
@@ -70,18 +70,19 @@ def preprocess_batches(loader, num_classes, kernel_size, stride, device):
         labels.append(lbls)
     x = torch.cat(samples, dim=0)
     y = torch.cat(labels, dim=0)
-    x = F.unfold(x, kernel_size=(kernel_size, kernel_size), stride=(stride, stride), padding=0).transpose(-2, -1)
+    x = F.unfold(x, kernel_size=(kernel_size, kernel_size), stride=(stride, stride), padding=padding).transpose(-2, -1)
     x = torch.cat((x, torch.ones((x.shape[0], 1, x.shape[2]), device=x.device)), dim=-2).to(device)
     y = F.one_hot(y, num_classes=num_classes).to(dtype=torch.float64, device=device)
     return x, y
 
 def main():
-    parser = argparse.ArgumentParser(description='Unified TensorNetwork Convolutional Training Script')
+    parser = argparse.ArgumentParser(description='Convolutional Tensor Network Training')
     parser.add_argument('--dataset', type=str, choices=DATASETS.keys(), default='mnist')
     parser.add_argument('--data_path', type=str, default=None, help='Override default data path')
     parser.add_argument('--batch_size', type=int, default=64)
     parser.add_argument('--kernel_size', type=int, default=None)
     parser.add_argument('--stride', type=int, default=None)
+    parser.add_argument('--padding', type=int, default=0, help='Padding for convolution')
     parser.add_argument('--N', type=int, default=None, help='Number of carriages')
     parser.add_argument('--r', type=int, default=None, help='Bond dimension')
     parser.add_argument('--CB', type=int, default=None, help='Convolution bond')
@@ -93,6 +94,7 @@ def main():
     parser.add_argument('--device', type=str, default='cuda')
     parser.add_argument('--download', action='store_true')
     parser.add_argument('--verbose', type=int, default=2)
+    parser.add_argument('--timeout', type=float, default=None, help='Timeout in seconds for training')
     args = parser.parse_args()
 
     # Set CUDA device
@@ -103,6 +105,7 @@ def main():
     ds = DATASETS[args.dataset]
     kernel_size = args.kernel_size if args.kernel_size is not None else ds['default_kernel']
     stride = args.stride if args.stride is not None else ds['default_stride']
+    padding = args.padding
     N = args.N if args.N is not None else (2 if args.dataset == 'mnist' else 3)
     r = args.r if args.r is not None else (2 if args.dataset == 'mnist' else 8)
     CB = args.CB if args.CB is not None else (-1 if args.dataset == 'mnist' else 8)
@@ -110,7 +113,7 @@ def main():
     # Data loading
     train_loader, test_loader, num_classes = get_data_loaders(
         args.dataset, args.batch_size, kernel_size, stride, args.download, args.data_path)
-    xinp_train, y_train = preprocess_batches(train_loader, num_classes, kernel_size, stride, device)
+    xinp_train, y_train = preprocess_batches(train_loader, num_classes, kernel_size, stride, device, padding=padding)
 
     # Model setup
     layer = TensorConvolutionTrainLayer(
@@ -145,7 +148,8 @@ def main():
         method=args.method,
         eps=args.eps,
         verbose=args.verbose,
-        num_swipes=args.num_swipes
+        num_swipes=args.num_swipes,
+        timeout=args.timeout
     )
 
     # Train accuracy
@@ -155,15 +159,13 @@ def main():
     print('Train Acc:', accuracy_train)
 
     # Load test data
-    xinp_test, y_test = preprocess_batches(test_loader, num_classes, kernel_size, stride, device)
+    xinp_test, y_test = preprocess_batches(test_loader, num_classes, kernel_size, stride, device, padding=padding)
 
     # Test accuracy
     y_pred_test = layer(xinp_test)
     y_pred_test = torch.cat((y_pred_test, torch.zeros_like(y_pred_test[:, :1])), dim=1)
     accuracy_test = balanced_accuracy_score(y_test.argmax(dim=-1).cpu().numpy(), y_pred_test.argmax(dim=-1).cpu().numpy())
     print('Test Acc:', accuracy_test)
-    accuracy_test_standard = accuracy_score(y_test.argmax(dim=-1).cpu().numpy(), y_pred_test.argmax(dim=-1).cpu().numpy())
-    print('Standard Test Acc:', accuracy_test_standard)
 
 if __name__ == '__main__':
     main()

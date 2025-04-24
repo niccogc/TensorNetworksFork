@@ -3,6 +3,7 @@ import string
 from collections import deque
 from tensor.node import TensorNode
 from tqdm.auto import tqdm
+import time
 
 class TensorNetwork:
     def __init__(self, input_nodes, main_nodes, train_nodes=None, output_labels=('s',), sample_dim='s'):
@@ -323,9 +324,11 @@ class TensorNetwork:
 
         return new_network
 
-    def accumulating_swipe(self, x, y_true, loss_fn, batch_size=1, method='exact', eps=1e-12, num_swipes=1, lr=1.0, convergence_criterion=None, orthonormalize=False, verbose=False, skip_right=False):
-        """Swipes the network to minimize the loss using accumulated A and b over mini-batches."""
-
+    def accumulating_swipe(self, x, y_true, loss_fn, batch_size=1, method='exact', eps=1e-12, num_swipes=1, lr=1.0, convergence_criterion=None, orthonormalize=False, verbose=False, skip_right=False, timeout=None):
+        """Swipes the network to minimize the loss using accumulated A and b over mini-batches.
+        Args:
+            timeout (float or None): Maximum time in seconds to run. If None, no timeout.
+        """
         data_size = len(x) if isinstance(x, torch.Tensor) else x[0].shape[0]
         if batch_size <= 0:
             batch_size = data_size
@@ -333,15 +336,25 @@ class TensorNetwork:
 
         node_l2r = None
         node_r2l = None
+        start_time = time.time() if timeout is not None else None
+
         for _ in range(num_swipes):
             # LEFT TO RIGHT
             for node_l2r in self.train_nodes:
                 if node_l2r in self.node_indices and node_r2l in self.node_indices and self.node_indices[node_l2r] == self.node_indices[node_r2l]:
                     continue
+                # Timeout check
+                if timeout is not None and (time.time() - start_time) > timeout:
+                    print(f"Timeout reached ({timeout} seconds). Stopping accumulating_swipe.")
+                    return False
                 A_out, b_out = None, None
                 total_loss = 0.0
 
                 for b in tqdm(range(batches), desc=f"Left to right pass ({node_l2r.name if hasattr(node_l2r, 'name') else 'node'})", disable=verbose < 2):
+                    # Timeout check inside batch loop
+                    if timeout is not None and (time.time() - start_time) > timeout:
+                        print(f"Timeout reached ({timeout} seconds). Stopping accumulating_swipe.")
+                        return False
                     x_batch = x[b*batch_size:(b+1)*batch_size] if isinstance(x, torch.Tensor) else [x[i][b*batch_size:(b+1)*batch_size] for i in range(len(x))]
                     y_batch = y_true[b*batch_size:(b+1)*batch_size]
 
@@ -362,7 +375,6 @@ class TensorNetwork:
                     print(f"Left loss ({node_l2r.name if hasattr(node_l2r, 'name') else 'node'}):", total_loss / batches)
                 try:
                     step_tensor = self.solve_system(node_l2r, A_out, b_out, method=method, eps=eps)
-                # _LinAlgError # if the system is singular return
                 except torch.linalg.LinAlgError:
                     print(f"Singular system for node {node_l2r.name if hasattr(node_l2r, 'name') else 'node'}")
                     return False
@@ -372,8 +384,9 @@ class TensorNetwork:
                     self.node_orthonormalize_left(node_l2r)
                 self.left_update_stacks(node_l2r)
 
-                # Convergence check after node update
+                # Convergence check after node update (pause timer here)
                 if convergence_criterion is not None:
+                    pause_time = time.time() if timeout is not None else None
                     y_trues = []
                     y_preds = []
                     for b in range(batches):
@@ -386,6 +399,10 @@ class TensorNetwork:
                     y_trues = torch.cat(y_trues, dim=0)
                     y_preds = torch.cat(y_preds, dim=0)
 
+                    if timeout is not None:
+                        # Resume timer after convergence check
+                        start_time += time.time() - pause_time
+
                     if convergence_criterion(y_preds, y_trues):
                         print('Converged (left pass)')
                         return True
@@ -397,10 +414,18 @@ class TensorNetwork:
             for node_r2l in reversed(self.train_nodes):
                 if node_l2r in self.node_indices and node_r2l in self.node_indices and self.node_indices[node_l2r] == self.node_indices[node_r2l]:
                     continue
+                # Timeout check
+                if timeout is not None and (time.time() - start_time) > timeout:
+                    print(f"Timeout reached ({timeout} seconds). Stopping accumulating_swipe.")
+                    return False
                 A_out, b_out = None, None
                 total_loss = 0.0
 
                 for b in tqdm(range(batches), desc=f"Right to left pass ({node_r2l.name if hasattr(node_r2l, 'name') else 'node'})", disable=verbose < 2):
+                    # Timeout check inside batch loop
+                    if timeout is not None and (time.time() - start_time) > timeout:
+                        print(f"Timeout reached ({timeout} seconds). Stopping accumulating_swipe.")
+                        return False
                     x_batch = x[b*batch_size:(b+1)*batch_size] if isinstance(x, torch.Tensor) else [x[i][b*batch_size:(b+1)*batch_size] for i in range(len(x))]
                     y_batch = y_true[b*batch_size:(b+1)*batch_size]
 
@@ -421,7 +446,6 @@ class TensorNetwork:
                     print(f"Right loss ({node_r2l.name if hasattr(node_r2l, 'name') else 'node'}):", total_loss / batches)
                 try:
                     step_tensor = self.solve_system(node_r2l, A_out, b_out, method=method, eps=eps)
-                # _LinAlgError # if the system is singular return
                 except torch.linalg.LinAlgError:
                     print(f"Singular system for node {node_r2l.name if hasattr(node_r2l, 'name') else 'node'}")
                     return False
@@ -431,8 +455,9 @@ class TensorNetwork:
                     self.node_orthonormalize_right(node_r2l)
                 self.right_update_stacks(node_r2l)
 
-                # Convergence check after node update
+                # Convergence check after node update (pause timer here)
                 if convergence_criterion is not None:
+                    pause_time = time.time() if timeout is not None else None
                     y_trues = []
                     y_preds = []
                     for b in range(batches):
@@ -444,6 +469,11 @@ class TensorNetwork:
                         y_preds.append(y_pred)
                     y_trues = torch.cat(y_trues, dim=0)
                     y_preds = torch.cat(y_preds, dim=0)
+
+                    if timeout is not None:
+                        # Resume timer after convergence check
+                        start_time += time.time() - pause_time
+
                     if convergence_criterion(y_preds, y_trues):
                         print('Converged (right pass)')
                         return True
