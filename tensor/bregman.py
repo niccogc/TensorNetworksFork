@@ -177,7 +177,7 @@ class XEAutogradBregman(BregFunction):
         log_s = torch.log_softmax(z, dim=-1) #append 0 and softmax -> remove 0
 
         loss = F.cross_entropy(log_s, y.argmax(dim=-1), reduction='none') # shape [..., C]
-        
+
         # Gradient of loss w.r.t x
         d_loss = torch.autograd.grad(
             outputs=loss.sum(), inputs=x, create_graph=True, retain_graph=True

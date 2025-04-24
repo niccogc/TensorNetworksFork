@@ -150,10 +150,11 @@ class TensorNetwork:
         A, b = self.get_A_b(node, d_loss, dd_loss)
 
         # Solve the system
-        step_tensor = self.solve_system(A, b, method=method, eps=eps)
+        step_tensor = self.solve_system(node, A, b, method=method, eps=eps)
         node.update_node(step_tensor, lr=lr)
         return step_tensor
 
+    @torch.no_grad()
     def get_A_b(self, node, grad, hessian):
         """Finds the update step for a given node"""
 
@@ -202,23 +203,69 @@ class TensorNetwork:
 
         return A, b
     
-    def solve_system(self, A, b, method='exact', eps=0.0):
+    def solve_system(self, node, A, b, method='exact', eps=0.0, delta=1e2):
         """Finds the update step for a given node"""
         # Solve the system
         A_f = A.flatten(0, A.ndim//2-1).flatten(1, -1)
         b_f = b.flatten()
-        
-        scale = A_f.abs().max()
+
+        scale = A_f.abs().max() #change to mean of diagonal
         A_f = A_f / scale
         b_f = b_f / scale
 
-        if method == 'exact':
+        if method.lower() == 'exact':
             x = torch.linalg.solve(A_f, -b_f)
-        elif method == 'cholesky':
+        elif method.lower() == 'ridge_exact':
+            A_f.add_((2 * eps) * torch.eye(A_f.shape[-1], dtype=A_f.dtype, device=A_f.device))
+            b_f.add_((2 * eps) * node.tensor.flatten())
+            x = torch.linalg.solve(A_f, -b_f)
+        elif method.lower() == 'cholesky':
             A_f_reg = A_f + eps * torch.eye(A_f.shape[-1], dtype=A_f.dtype, device=A_f.device)
             L = torch.linalg.cholesky(A_f_reg)
             x = torch.cholesky_solve(-b_f.unsqueeze(-1), L)
             x = x.squeeze(-1)
+        elif method.lower().startswith('dog'):
+            # Dogleg trust-region method
+            # Steepest descent step: p_sd = - (g^T g) / (g^T A g) * g
+            g = b_f
+            g_norm = torch.norm(g)
+            Ag = A_f @ g
+            gAg = g @ Ag
+            if gAg > 1e-12:
+                alpha_sd = (g_norm ** 2) / gAg
+            else:
+                alpha_sd = 1.0
+            p_sd = -alpha_sd * g
+
+            # Gauss-Newton step: solve A p_gn = -g
+            try:
+                p_gn = torch.linalg.solve(A_f, -g)
+            except torch.linalg.LinAlgError:
+                # Fallback to steepest descent if singular
+                p_gn = p_sd
+
+            norm_p_gn = torch.norm(p_gn)
+            norm_p_sd = torch.norm(p_sd)
+
+            if norm_p_gn <= delta:
+                x = p_gn
+            elif norm_p_sd >= delta:
+                x = (delta / norm_p_sd) * p_sd
+            else:
+                # Find tau such that ||p_sd + tau*(p_gn - p_sd)|| = delta
+                d = p_gn - p_sd
+                a = (d @ d).item()
+                b_coeff = 2 * (p_sd @ d).item()
+                c = (p_sd @ p_sd).item() - delta ** 2
+                # Solve a tau^2 + b tau + c = 0 for tau > 0
+                discriminant = b_coeff ** 2 - 4 * a * c
+                if discriminant < 0:
+                    tau = 0.0
+                else:
+                    tau1 = (-b_coeff + discriminant ** 0.5) / (2 * a)
+                    tau2 = (-b_coeff - discriminant ** 0.5) / (2 * a)
+                    tau = max(tau1, tau2, 0.0)
+                x = p_sd + tau * d
         else:
             raise ValueError(f"Unknown method: {method}")
 
@@ -314,7 +361,7 @@ class TensorNetwork:
                 if verbose:
                     print(f"Left loss ({node_l2r.name if hasattr(node_l2r, 'name') else 'node'}):", total_loss / batches)
                 try:
-                    step_tensor = self.solve_system(A_out, b_out, method=method, eps=eps)
+                    step_tensor = self.solve_system(node_l2r, A_out, b_out, method=method, eps=eps)
                 # _LinAlgError # if the system is singular return
                 except torch.linalg.LinAlgError:
                     print(f"Singular system for node {node_l2r.name if hasattr(node_l2r, 'name') else 'node'}")
@@ -373,7 +420,7 @@ class TensorNetwork:
                 if verbose:
                     print(f"Right loss ({node_r2l.name if hasattr(node_r2l, 'name') else 'node'}):", total_loss / batches)
                 try:
-                    step_tensor = self.solve_system(A_out, b_out, method=method, eps=eps)
+                    step_tensor = self.solve_system(node_r2l, A_out, b_out, method=method, eps=eps)
                 # _LinAlgError # if the system is singular return
                 except torch.linalg.LinAlgError:
                     print(f"Singular system for node {node_r2l.name if hasattr(node_r2l, 'name') else 'node'}")
