@@ -144,17 +144,6 @@ class TensorNetwork:
             contracted = contracted.contract_with(previous_stack, connect_labels)
         self.right_stacks[node] = contracted
 
-    def step(self, node, d_loss, dd_loss, lr=1.0, method='exact', eps=0.0):
-        """Finds the update step for a given node"""
-
-        # Determine broadcast
-        A, b = self.get_A_b(node, d_loss, dd_loss)
-
-        # Solve the system
-        step_tensor = self.solve_system(node, A, b, method=method, eps=eps)
-        node.update_node(step_tensor, lr=lr)
-        return step_tensor
-
     @torch.no_grad()
     def get_A_b(self, node, grad, hessian):
         """Finds the update step for a given node"""
@@ -324,7 +313,7 @@ class TensorNetwork:
 
         return new_network
 
-    def accumulating_swipe(self, x, y_true, loss_fn, batch_size=1, method='exact', eps=1e-12, num_swipes=1, lr=1.0, convergence_criterion=None, orthonormalize=False, verbose=False, skip_right=False, timeout=None):
+    def accumulating_swipe(self, x, y_true, loss_fn, batch_size=1, num_swipes=1, lr=1.0, method='exact', eps=1e-12, delta=1.0, convergence_criterion=None, orthonormalize=False, verbose=False, skip_right=False, timeout=None):
         """Swipes the network to minimize the loss using accumulated A and b over mini-batches.
         Args:
             timeout (float or None): Maximum time in seconds to run. If None, no timeout.
@@ -374,7 +363,7 @@ class TensorNetwork:
                 if verbose:
                     print(f"Left loss ({node_l2r.name if hasattr(node_l2r, 'name') else 'node'}):", total_loss / batches)
                 try:
-                    step_tensor = self.solve_system(node_l2r, A_out, b_out, method=method, eps=eps)
+                    step_tensor = self.solve_system(node_l2r, A_out, b_out, method=method, eps=eps, delta=delta)
                 except torch.linalg.LinAlgError:
                     print(f"Singular system for node {node_l2r.name if hasattr(node_l2r, 'name') else 'node'}")
                     return False
@@ -445,7 +434,7 @@ class TensorNetwork:
                 if verbose:
                     print(f"Right loss ({node_r2l.name if hasattr(node_r2l, 'name') else 'node'}):", total_loss / batches)
                 try:
-                    step_tensor = self.solve_system(node_r2l, A_out, b_out, method=method, eps=eps)
+                    step_tensor = self.solve_system(node_r2l, A_out, b_out, method=method, eps=eps, delta=delta)
                 except torch.linalg.LinAlgError:
                     print(f"Singular system for node {node_r2l.name if hasattr(node_r2l, 'name') else 'node'}")
                     return False

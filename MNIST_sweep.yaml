@@ -1,0 +1,45 @@
+program: train_image.py
+name: MNISTSweep
+method: bayes
+metric:
+  goal: maximize
+  name: test/b_acc_f
+parameters:
+  kernel_size:
+    values: [1, 2, 3, 4, 6, 7, 8, 14, 28]
+  stride:
+    values: [1, 2, 3, 4, 6, 7, 8, 14, 28]
+  padding:
+    values: [0, 1, 2, 3, 4, 6, 7, 8, 14, 28]
+  N:
+    min: 1
+    max: 8
+  r:
+    values: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 16, 20, 24, 28, 32]
+  CB:
+    values: [-1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 16, 20, 24, 28, 32]
+  method:
+    values: ["exact", "ridge_exact", "cholesky", "dogleg"]
+  eps:
+    distribution: log_uniform_values
+    min: 1e-5
+    max: 1e2
+  delta:
+    distribution: log_uniform_values
+    min: 1e-5
+    max: 1e2
+
+command:
+  - ${interpreter}
+  - ${program}
+  - "--timeout"
+  - "600"
+  - "--verbose"
+  - "0"
+  - "--dataset"
+  - "mnist"
+  - "--wandb_project"
+  - "MNISTSweep"
+  - "--num_swipes"
+  - "1000"
+  - ${args}

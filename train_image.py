@@ -6,7 +6,7 @@ import torchvision.transforms as transforms
 from torch.nn import functional as F
 from tensor.layers import TensorConvolutionTrainLayer
 from tensor.bregman import XEAutogradBregman
-from sklearn.metrics import balanced_accuracy_score, accuracy_score
+from sklearn.metrics import balanced_accuracy_score
 
 # ---- Dataset registry ----
 DATASETS = {
@@ -16,8 +16,8 @@ DATASETS = {
         'num_classes': 10,
         'input_channels': 1,
         'normalize': ((0.1307,), (0.3081,)),
-        'default_kernel': 2,
-        'default_stride': 2,
+        'default_kernel': 7,
+        'default_stride': 7,
     },
     'cifar10': {
         'class': torchvision.datasets.CIFAR10,
@@ -48,7 +48,7 @@ DATASETS = {
     },
 }
 
-def get_data_loaders(dataset_name, batch_size, kernel_size, stride, download, data_path=None):
+def get_data_loaders(dataset_name, batch_size, download, data_path=None):
     ds = DATASETS[dataset_name]
     root = data_path if data_path else ds['root']
     transform = transforms.Compose([
@@ -79,7 +79,7 @@ def main():
     parser = argparse.ArgumentParser(description='Convolutional Tensor Network Training')
     parser.add_argument('--dataset', type=str, choices=DATASETS.keys(), default='mnist')
     parser.add_argument('--data_path', type=str, default=None, help='Override default data path')
-    parser.add_argument('--batch_size', type=int, default=64)
+    parser.add_argument('--batch_size', type=int, default=512)
     parser.add_argument('--kernel_size', type=int, default=None)
     parser.add_argument('--stride', type=int, default=None)
     parser.add_argument('--padding', type=int, default=0, help='Padding for convolution')
@@ -90,12 +90,21 @@ def main():
     parser.add_argument('--lr', type=float, default=1.0)
     parser.add_argument('--method', type=str, default='exact')
     parser.add_argument('--eps', type=float, default=1e-4)
+    parser.add_argument('--delta', type=float, default=1.0)
     parser.add_argument('--orthonormalize', action='store_true')
     parser.add_argument('--device', type=str, default='cuda')
     parser.add_argument('--download', action='store_true')
     parser.add_argument('--verbose', type=int, default=2)
     parser.add_argument('--timeout', type=float, default=None, help='Timeout in seconds for training')
+    parser.add_argument('--wandb_project', type=str, default=None, help='WandB project name')
     args = parser.parse_args()
+
+    # WandB setup from agent
+    wandb_enabled = False
+    if args.wandb_project:
+        import wandb
+        wandb.init(project=args.wandb_project, config=vars(args))
+        wandb_enabled = True
 
     # Set CUDA device
     os.environ["CUDA_VISIBLE_DEVICES"] = "0"
@@ -105,14 +114,13 @@ def main():
     ds = DATASETS[args.dataset]
     kernel_size = args.kernel_size if args.kernel_size is not None else ds['default_kernel']
     stride = args.stride if args.stride is not None else ds['default_stride']
-    padding = args.padding
-    N = args.N if args.N is not None else (2 if args.dataset == 'mnist' else 3)
-    r = args.r if args.r is not None else (2 if args.dataset == 'mnist' else 8)
-    CB = args.CB if args.CB is not None else (-1 if args.dataset == 'mnist' else 8)
+    padding = args.padding if args.padding is not None else 0
+    N = args.N if args.N is not None else 3
+    r = args.r if args.r is not None else 3
+    CB = args.CB if args.CB is not None else -1
 
     # Data loading
-    train_loader, test_loader, num_classes = get_data_loaders(
-        args.dataset, args.batch_size, kernel_size, stride, args.download, args.data_path)
+    train_loader, test_loader, num_classes = get_data_loaders(args.dataset, args.batch_size, args.download, args.data_path)
     xinp_train, y_train = preprocess_batches(train_loader, num_classes, kernel_size, stride, device, padding=padding)
 
     # Model setup
@@ -130,33 +138,41 @@ def main():
     with torch.inference_mode():
         y_pred = layer(xinp_train[:64])
         w = 1/y_pred.std().item()
+        del y_pred
     bf = XEAutogradBregman(w=w)
 
     def convergence_criterion(y_pred, y_true):
         y_pred = torch.cat((y_pred, torch.zeros_like(y_pred[:, :1])), dim=1)
         balanced_acc = balanced_accuracy_score(y_true.argmax(dim=-1).cpu().numpy(), y_pred.argmax(dim=-1).cpu().numpy())
         print("Balanced Accuracy:", balanced_acc)
+        if wandb_enabled:
+            wandb.log({"train/b_acc": balanced_acc})
         return False
 
     # Training
-    layer.tensor_network.accumulating_swipe(
-        xinp_train, y_train, bf,
-        batch_size=args.batch_size,
-        lr=args.lr,
-        convergence_criterion=convergence_criterion,
-        orthonormalize=args.orthonormalize,
-        method=args.method,
-        eps=args.eps,
-        verbose=args.verbose,
-        num_swipes=args.num_swipes,
-        timeout=args.timeout
-    )
-
-    # Train accuracy
-    y_pred_train = layer(xinp_train)
-    y_pred_train = torch.cat((y_pred_train, torch.zeros_like(y_pred_train[:, :1])), dim=1)
-    accuracy_train = balanced_accuracy_score(y_train.argmax(dim=-1).cpu().numpy(), y_pred_train.argmax(dim=-1).cpu().numpy())
-    print('Train Acc:', accuracy_train)
+    try:
+        layer.tensor_network.accumulating_swipe(
+            xinp_train, y_train, bf,
+            batch_size=args.batch_size,
+            num_swipes=args.num_swipes,
+            method=args.method,
+            lr=args.lr,
+            eps=args.eps,
+            delta=args.delta,
+            orthonormalize=args.orthonormalize,
+            convergence_criterion=convergence_criterion,
+            timeout=args.timeout,
+            verbose=args.verbose,
+        )
+        # Train accuracy
+        y_pred_train = layer(xinp_train)
+        y_pred_train = torch.cat((y_pred_train, torch.zeros_like(y_pred_train[:, :1])), dim=1)
+        accuracy_train = balanced_accuracy_score(y_train.argmax(dim=-1).cpu().numpy(), y_pred_train.argmax(dim=-1).cpu().numpy())
+        print('Train Acc:', accuracy_train)
+        if wandb_enabled:
+            wandb.log({"train/b_acc_f": accuracy_train})
+    except:
+        pass
 
     # Load test data
     xinp_test, y_test = preprocess_batches(test_loader, num_classes, kernel_size, stride, device, padding=padding)
@@ -166,6 +182,8 @@ def main():
     y_pred_test = torch.cat((y_pred_test, torch.zeros_like(y_pred_test[:, :1])), dim=1)
     accuracy_test = balanced_accuracy_score(y_test.argmax(dim=-1).cpu().numpy(), y_pred_test.argmax(dim=-1).cpu().numpy())
     print('Test Acc:', accuracy_test)
+    if wandb_enabled:
+        wandb.log({"test/b_acc_f": accuracy_test})
 
 if __name__ == '__main__':
     main()
