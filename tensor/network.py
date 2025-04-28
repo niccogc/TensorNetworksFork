@@ -320,10 +320,12 @@ class TensorNetwork:
 
         return new_network
 
-    def accumulating_swipe(self, x, y_true, loss_fn, batch_size=1, num_swipes=1, lr=1.0, method='exact', eps=1e-12, delta=1.0, convergence_criterion=None, orthonormalize=False, verbose=False, skip_right=False, timeout=None):
+    def accumulating_swipe(self, x, y_true, loss_fn, batch_size=1, num_swipes=1, lr=1.0, method='exact', eps=1e-12, delta=1.0, convergence_criterion=None, orthonormalize=False, verbose=False, skip_right=False, timeout=None, data_device=None, model_device=None, disable_tqdm=None):
         """Swipes the network to minimize the loss using accumulated A and b over mini-batches.
         Args:
             timeout (float or None): Maximum time in seconds to run. If None, no timeout.
+            data_device (torch.device or None): Device where the data is stored (CPU or GPU).
+            model_device (torch.device or None): Device where the model is (typically GPU).
         """
         data_size = len(x) if isinstance(x, torch.Tensor) else x[0].shape[0]
         if batch_size <= 0:
@@ -333,6 +335,18 @@ class TensorNetwork:
         node_l2r = None
         node_r2l = None
         start_time = time.time() if timeout is not None else None
+
+        def move_batch(batch):
+            if model_device is not None and data_device is not None and data_device != model_device:
+                if isinstance(batch, torch.Tensor):
+                    return batch.to(model_device, non_blocking=True)
+                elif isinstance(batch, (list, tuple)):
+                    return [b.to(model_device, non_blocking=True) for b in batch]
+            return batch
+
+        # If disable_tqdm is not set, default to verbose < 2
+        if disable_tqdm is None:
+            disable_tqdm = verbose < 2
 
         for NS in range(num_swipes):
             if isinstance(eps, list):
@@ -350,13 +364,15 @@ class TensorNetwork:
                 A_out, b_out, J_out = None, None, None
                 total_loss = 0.0
 
-                for b in tqdm(range(batches), desc=f"Left to right pass ({node_l2r.name if hasattr(node_l2r, 'name') else 'node'})", disable=verbose < 2):
+                for b in tqdm(range(batches), desc=f"Left to right pass ({node_l2r.name if hasattr(node_l2r, 'name') else 'node'})", disable=disable_tqdm):
                     # Timeout check inside batch loop
                     if timeout is not None and (time.time() - start_time) > timeout:
                         print(f"Timeout reached ({timeout} seconds). Stopping accumulating_swipe.")
                         return False
                     x_batch = x[b*batch_size:(b+1)*batch_size] if isinstance(x, torch.Tensor) else [x[i][b*batch_size:(b+1)*batch_size] for i in range(len(x))]
                     y_batch = y_true[b*batch_size:(b+1)*batch_size]
+                    x_batch = move_batch(x_batch)
+                    y_batch = move_batch(y_batch)
 
                     y_pred = self.forward(x_batch).permute_first(*self.output_labels).tensor
                     loss, d_loss, sqd_loss = loss_fn.forward(y_pred, y_batch)
@@ -394,6 +410,8 @@ class TensorNetwork:
                     for b in range(batches):
                         x_batch = x[b*batch_size:(b+1)*batch_size] if isinstance(x, torch.Tensor) else [x[i][b*batch_size:(b+1)*batch_size] for i in range(len(x))]
                         y_batch = y_true[b*batch_size:(b+1)*batch_size]
+                        x_batch = move_batch(x_batch)
+                        y_batch = move_batch(y_batch)
 
                         y_pred = self.forward(x_batch).permute_first(*self.output_labels).tensor
                         y_trues.append(y_batch)
@@ -428,13 +446,15 @@ class TensorNetwork:
                 A_out, b_out, J_out = None, None, None
                 total_loss = 0.0
 
-                for b in tqdm(range(batches), desc=f"Right to left pass ({node_r2l.name if hasattr(node_r2l, 'name') else 'node'})", disable=verbose < 2):
+                for b in tqdm(range(batches), desc=f"Right to left pass ({node_r2l.name if hasattr(node_r2l, 'name') else 'node'})", disable=disable_tqdm):
                     # Timeout check inside batch loop
                     if timeout is not None and (time.time() - start_time) > timeout:
                         print(f"Timeout reached ({timeout} seconds). Stopping accumulating_swipe.")
                         return False
                     x_batch = x[b*batch_size:(b+1)*batch_size] if isinstance(x, torch.Tensor) else [x[i][b*batch_size:(b+1)*batch_size] for i in range(len(x))]
                     y_batch = y_true[b*batch_size:(b+1)*batch_size]
+                    x_batch = move_batch(x_batch)
+                    y_batch = move_batch(y_batch)
 
                     y_pred = self.forward(x_batch).permute_first(*self.output_labels).tensor
                     loss, d_loss, sqd_loss = loss_fn.forward(y_pred, y_batch)
@@ -472,6 +492,8 @@ class TensorNetwork:
                     for b in range(batches):
                         x_batch = x[b*batch_size:(b+1)*batch_size] if isinstance(x, torch.Tensor) else [x[i][b*batch_size:(b+1)*batch_size] for i in range(len(x))]
                         y_batch = y_true[b*batch_size:(b+1)*batch_size]
+                        x_batch = move_batch(x_batch)
+                        y_batch = move_batch(y_batch)
 
                         y_pred = self.forward(x_batch).permute_first(*self.output_labels).tensor
                         y_trues.append(y_batch)
