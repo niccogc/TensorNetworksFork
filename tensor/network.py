@@ -191,15 +191,16 @@ class TensorNetwork:
         A = torch.einsum(einsum_A, J.tensor, J.tensor, hessian)
         b = torch.einsum(einsum_b, J.tensor, grad)
 
-        return A, b
+        J_sum = J.permute_first(dim_order).sum_labels(broadcast_dims)
+        return A, b, J_sum.flatten()
     
-    def solve_system(self, node, A, b, method='exact', eps=0.0, delta=1e2):
+    def solve_system(self, node, A, b, J, method='exact', eps=0.0, delta=1e2):
         """Finds the update step for a given node"""
         # Solve the system
         A_f = A.flatten(0, A.ndim//2-1).flatten(1, -1)
         b_f = b.flatten()
 
-        scale = A_f.abs().max() #change to mean of diagonal
+        scale = A_f.diag().abs().mean()
         A_f = A_f / scale
         b_f = b_f / scale
 
@@ -217,45 +218,51 @@ class TensorNetwork:
         elif method.lower().startswith('dog'):
             # Dogleg trust-region method
             # Steepest descent step: p_sd = - (g^T g) / (g^T A g) * g
-            g = b_f
-            g_norm = torch.norm(g)
-            Ag = A_f @ g
-            gAg = g @ Ag
-            if gAg > 1e-12:
-                alpha_sd = (g_norm ** 2) / gAg
-            else:
-                alpha_sd = 1.0
-            p_sd = -alpha_sd * g
+            p_sd = -b_f
 
             # Gauss-Newton step: solve A p_gn = -g
             try:
-                p_gn = torch.linalg.solve(A_f, -g)
+                p_gn = torch.linalg.solve(A_f, p_sd)
             except torch.linalg.LinAlgError:
                 # Fallback to steepest descent if singular
+                print("It was singular")
                 p_gn = p_sd
 
             norm_p_gn = torch.norm(p_gn)
             norm_p_sd = torch.norm(p_sd)
+            tau = (norm_p_sd ** 2) / (torch.norm(J * p_sd) ** 2)
+            t = tau * p_sd
+            norm_t = torch.norm(t)
 
             if norm_p_gn <= delta:
                 x = p_gn
-            elif norm_p_sd >= delta:
+                print("I did a gauss newton step! :D")
+            elif norm_t >= delta:
                 x = (delta / norm_p_sd) * p_sd
+                print("I did a steepest descent step! :(")
             else:
-                # Find tau such that ||p_sd + tau*(p_gn - p_sd)|| = delta
-                d = p_gn - p_sd
-                a = (d @ d).item()
-                b_coeff = 2 * (p_sd @ d).item()
-                c = (p_sd @ p_sd).item() - delta ** 2
-                # Solve a tau^2 + b tau + c = 0 for tau > 0
-                discriminant = b_coeff ** 2 - 4 * a * c
-                if discriminant < 0:
-                    tau = 0.0
+                d = p_gn - t
+
+                a = torch.norm(d)
+                b_coeff = 2 * torch.dot(t, d)
+                c = norm_t - delta**2
+                
+                # Solve for beta, choose the one that is between 0 and 1
+                beta_p = (-b_coeff + torch.sqrt(b_coeff**2 - 4 * a * c)) / (2 * a)
+                beta_n = (-b_coeff - torch.sqrt(b_coeff**2 - 4 * a * c)) / (2 * a)
+                if beta_p >= 0 and beta_p <= 1:
+                    beta = beta_p
+                elif beta_n >= 0 and beta_n <= 1:
+                    beta = beta_n
+                elif beta_p > 1:
+                    beta = beta_p
+                elif beta_n > 1:
+                    beta = beta_n
                 else:
-                    tau1 = (-b_coeff + discriminant ** 0.5) / (2 * a)
-                    tau2 = (-b_coeff - discriminant ** 0.5) / (2 * a)
-                    tau = max(tau1, tau2, 0.0)
-                x = p_sd + tau * d
+                    raise ValueError("No valid beta found in dogleg method.")
+                x = t + beta * d
+                print(f"Beta: {beta.item():.4g}, Tau: {tau.item():.4g} :)))")
+
         else:
             raise ValueError(f"Unknown method: {method}")
 
@@ -327,7 +334,11 @@ class TensorNetwork:
         node_r2l = None
         start_time = time.time() if timeout is not None else None
 
-        for _ in range(num_swipes):
+        for NS in range(num_swipes):
+            if isinstance(eps, list):
+                eps_ = eps[NS*2]
+            else:
+                eps_ = eps
             # LEFT TO RIGHT
             for node_l2r in self.train_nodes:
                 if node_l2r in self.node_indices and node_r2l in self.node_indices and self.node_indices[node_l2r] == self.node_indices[node_r2l]:
@@ -336,7 +347,7 @@ class TensorNetwork:
                 if timeout is not None and (time.time() - start_time) > timeout:
                     print(f"Timeout reached ({timeout} seconds). Stopping accumulating_swipe.")
                     return False
-                A_out, b_out = None, None
+                A_out, b_out, J_out = None, None, None
                 total_loss = 0.0
 
                 for b in tqdm(range(batches), desc=f"Left to right pass ({node_l2r.name if hasattr(node_l2r, 'name') else 'node'})", disable=verbose < 2):
@@ -350,20 +361,22 @@ class TensorNetwork:
                     y_pred = self.forward(x_batch).permute_first(*self.output_labels).tensor
                     loss, d_loss, sqd_loss = loss_fn.forward(y_pred, y_batch)
 
-                    A, b_vec = self.get_A_b(node_l2r, d_loss, sqd_loss)
+                    A, b_vec, J = self.get_A_b(node_l2r, d_loss, sqd_loss)
                     if A_out is None:
                         A_out = A
                         b_out = b_vec
+                        J_out = J
                     else:
                         A_out.add_(A)
                         b_out.add_(b_vec)
+                        J_out.add_(J)
 
                     total_loss += loss.mean().item()
 
                 if verbose:
-                    print(f"Left loss ({node_l2r.name if hasattr(node_l2r, 'name') else 'node'}):", total_loss / batches)
+                    print(f"NS: {NS}, Left loss ({node_l2r.name if hasattr(node_l2r, 'name') else 'node'}):", total_loss / batches, f" (eps: {eps_})")
                 try:
-                    step_tensor = self.solve_system(node_l2r, A_out, b_out, method=method, eps=eps, delta=delta)
+                    step_tensor = self.solve_system(node_l2r, A_out, b_out, J_out, method=method, eps=eps_, delta=delta)
                 except torch.linalg.LinAlgError:
                     print(f"Singular system for node {node_l2r.name if hasattr(node_l2r, 'name') else 'node'}")
                     return False
@@ -399,6 +412,11 @@ class TensorNetwork:
             if skip_right:
                 continue
 
+            if isinstance(eps, list):
+                eps_ = eps[NS*2+1]
+            else:
+                eps_ = eps
+
             # RIGHT TO LEFT
             for node_r2l in reversed(self.train_nodes):
                 if node_l2r in self.node_indices and node_r2l in self.node_indices and self.node_indices[node_l2r] == self.node_indices[node_r2l]:
@@ -407,7 +425,7 @@ class TensorNetwork:
                 if timeout is not None and (time.time() - start_time) > timeout:
                     print(f"Timeout reached ({timeout} seconds). Stopping accumulating_swipe.")
                     return False
-                A_out, b_out = None, None
+                A_out, b_out, J_out = None, None, None
                 total_loss = 0.0
 
                 for b in tqdm(range(batches), desc=f"Right to left pass ({node_r2l.name if hasattr(node_r2l, 'name') else 'node'})", disable=verbose < 2):
@@ -421,20 +439,22 @@ class TensorNetwork:
                     y_pred = self.forward(x_batch).permute_first(*self.output_labels).tensor
                     loss, d_loss, sqd_loss = loss_fn.forward(y_pred, y_batch)
 
-                    A, b_vec = self.get_A_b(node_r2l, d_loss, sqd_loss)
+                    A, b_vec, J = self.get_A_b(node_r2l, d_loss, sqd_loss)
                     if A_out is None:
                         A_out = A
                         b_out = b_vec
+                        J_out = J
                     else:
                         A_out.add_(A)
                         b_out.add_(b_vec)
+                        J_out.add_(J)
 
                     total_loss += loss.mean().item()
 
                 if verbose:
-                    print(f"Right loss ({node_r2l.name if hasattr(node_r2l, 'name') else 'node'}):", total_loss / batches)
+                    print(f"NS: {NS}, Right loss ({node_r2l.name if hasattr(node_r2l, 'name') else 'node'}):", total_loss / batches, f" (eps: {eps_})")
                 try:
-                    step_tensor = self.solve_system(node_r2l, A_out, b_out, method=method, eps=eps, delta=delta)
+                    step_tensor = self.solve_system(node_r2l, A_out, b_out, J_out, method=method, eps=eps_, delta=delta)
                 except torch.linalg.LinAlgError:
                     print(f"Singular system for node {node_r2l.name if hasattr(node_r2l, 'name') else 'node'}")
                     return False

@@ -7,6 +7,7 @@ class TensorNode:
         """Initializes a TensorNode object with the given shape and dimension labels."""
         if isinstance(tensor_or_shape, tuple) or isinstance(tensor_or_shape, list):
             self.tensor = torch.randn(tensor_or_shape)
+            self.tensor = self.tensor / torch.norm(self.tensor)
         else:
             self.tensor = tensor_or_shape
         self.dim_labels = list(dim_labels)
@@ -113,6 +114,13 @@ class TensorNode:
     def is_horizontal_bond(self, label):
         """Checks if the given label is a horizontal bond."""
         return label in self.left_labels or label in self.right_labels
+    
+    def sum_labels(self, labels):
+        """Sums the tensor over the given labels."""
+        if isinstance(labels, str):
+            labels = [labels]
+        indices = [self.dim_labels.index(label) for label in labels]
+        return self.tensor.sum(indices)
 
     def squeeze(self, exclude=set()):
         """Squeezes the tensor and removes singleton dimensions."""
