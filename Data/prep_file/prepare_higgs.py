@@ -16,6 +16,7 @@ print(y.head())
 print(X.head())
 encoder = OneHotEncoder(sparse_output=False)
 y_onehot = encoder.fit_transform(y.values.reshape(-1, 1))
+
 # Standardize features
 scaler = StandardScaler()
 X_scaled = scaler.fit_transform(X.values)

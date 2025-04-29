@@ -1,32 +1,22 @@
 from ucimlrepo import fetch_ucirepo 
 import torch
-import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 # fetch dataset 
-abalone = fetch_ucirepo(id=1) 
+gammatelescope = fetch_ucirepo(id=159) 
   
 # data (as pandas dataframes) 
-X = abalone.data.features 
-y = abalone.data.targets 
-cat_columns = ['Sex']
-enc = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
-scaler = StandardScaler()
-y_scaled= scaler.fit_transform(y.values)
+X = gammatelescope.data.features 
+y = gammatelescope.data.targets 
+
+encoder = OneHotEncoder(sparse_output=False)
+y_onehot = encoder.fit_transform(y.values.reshape(-1, 1))
 # Standardize features
-# One-hot encode categorical columns
-Xcat_encoded = enc.fit_transform(X[cat_columns])
-
-# Drop categorical columns and scale numerical ones
-Xnum = X.drop(columns=cat_columns)
 scaler = StandardScaler()
-X_scaled = scaler.fit_transform(Xnum)
-
-# Concatenate scaled numeric and one-hot encoded categorical
-X_scaled = np.hstack([X_scaled, Xcat_encoded])
-
-X_train, X_temp, y_train, y_temp = train_test_split(X_scaled, y_scaled, test_size=0.4, random_state=42)
-X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42)
+X_scaled = scaler.fit_transform(X.values)
+# Split into train, val, test (60/20/20)
+X_train, X_temp, y_train, y_temp = train_test_split(X_scaled, y_onehot, test_size=0.4, random_state=42, stratify=y)
+X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42, stratify=y_temp)
 
 # Convert to torch tensors (float64 for compatibility)
 X_train = torch.tensor(X_train, dtype=torch.float64)
@@ -50,5 +40,5 @@ out = {
     'X_test': X_test,
     'y_test': y_test
 }
-torch.save(out, '../data/abaloner_tensor.pt')
-print('Saved abaloneeer dataset to ../data/abaloner_tensor.pt')
+torch.save(out, '../data/gammatelescope_tensor.pt')
+print('Saved gammatelescope dataset to ../data/gammatelescope_tensor.pt')
