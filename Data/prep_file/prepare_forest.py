@@ -4,17 +4,19 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 # fetch dataset 
-abalone = fetch_ucirepo(id=1) 
+forest = fetch_ucirepo(id=162) 
   
 # data (as pandas dataframes) 
-X = abalone.data.features 
-y = abalone.data.targets 
-cat_columns = ['Sex']
+X = forest.data.features 
+y = forest.data.targets 
+cat_columns = ['month', 'day']
+
 enc = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
 scaler = StandardScaler()
 y_scaled= scaler.fit_transform(y.values)
 # Standardize features
 # One-hot encode categorical columns
+scaler = StandardScaler()
 Xcat_encoded = enc.fit_transform(X[cat_columns])
 
 # Drop categorical columns and scale numerical ones
@@ -25,6 +27,7 @@ X_scaled = scaler.fit_transform(Xnum)
 # Concatenate scaled numeric and one-hot encoded categorical
 X_scaled = np.hstack([X_scaled, Xcat_encoded])
 
+# Split into train, val, test (60/20/20)
 X_train, X_temp, y_train, y_temp = train_test_split(X_scaled, y_scaled, test_size=0.4, random_state=42)
 X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42)
 
@@ -50,5 +53,5 @@ out = {
     'X_test': X_test,
     'y_test': y_test
 }
-torch.save(out, '../data/abaloner_tensor.pt')
-print('Saved abaloneeer dataset to ../data/abaloner_tensor.pt')
+torch.save(out, '../data/forest_tensor.pt')
+print('Saved forest dataset to ../data/forest_tensor.pt')

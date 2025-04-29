@@ -1,30 +1,25 @@
 from ucimlrepo import fetch_ucirepo 
 import torch
-import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
+import pandas as pd
 # fetch dataset 
-abalone = fetch_ucirepo(id=1) 
+energyprediction = fetch_ucirepo(id=374) 
   
 # data (as pandas dataframes) 
-X = abalone.data.features 
-y = abalone.data.targets 
-cat_columns = ['Sex']
-enc = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
+X = energyprediction.data.features 
+y = energyprediction.data.targets 
+
+X['date'] = pd.to_datetime(X['date'], format='%Y-%m-%d%H:%M:%S')
+X['date'] = X['date'].astype('int64') // 10**9 # days since year 1
+
 scaler = StandardScaler()
 y_scaled= scaler.fit_transform(y.values)
-# Standardize features
-# One-hot encode categorical columns
-Xcat_encoded = enc.fit_transform(X[cat_columns])
-
-# Drop categorical columns and scale numerical ones
-Xnum = X.drop(columns=cat_columns)
 scaler = StandardScaler()
-X_scaled = scaler.fit_transform(Xnum)
+# Standardize features
+X_scaled = scaler.fit_transform(X.values)
 
-# Concatenate scaled numeric and one-hot encoded categorical
-X_scaled = np.hstack([X_scaled, Xcat_encoded])
-
+# Split into train, val, test (60/20/20)
 X_train, X_temp, y_train, y_temp = train_test_split(X_scaled, y_scaled, test_size=0.4, random_state=42)
 X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42)
 
@@ -50,5 +45,5 @@ out = {
     'X_test': X_test,
     'y_test': y_test
 }
-torch.save(out, '../data/abaloner_tensor.pt')
-print('Saved abaloneeer dataset to ../data/abaloner_tensor.pt')
+torch.save(out, '../data/energyprediction_tensor.pt')
+print('Saved energyprediction dataset to ../data/energyprediction_tensor.pt')
