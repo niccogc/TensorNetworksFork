@@ -55,9 +55,13 @@ class TensorNetwork:
         prev_stack = None
 
         for node in nodes:
-            contracted = node.contract_vertically(exclude=exclude_nodes)
             if prev_stack is not None:
-                contracted = prev_stack.contract_with(contracted, contracted.get_connecting_labels(prev_stack))
+                contracted = prev_stack
+            else:
+                contracted = node
+            vertical_nodes = node.get_vertical_nodes(exclude=exclude_nodes)
+            for vnode in vertical_nodes:
+                contracted = contracted.contract_with(vnode, vnode.get_connecting_labels(contracted))
             stack_dict[node] = contracted
             prev_stack = contracted
 
@@ -179,7 +183,7 @@ class TensorNetwork:
                 J_out1.append(dim_labels[d])
                 J_out2.append(dim_labels['_' + d])
                 dim_order.append(d)
-                
+
         J_out1 = ''.join([J_out1[dim_order.index(d)] for d in node.dim_labels])
         J_out2 = ''.join([J_out2[dim_order.index(d)] for d in node.dim_labels])
 
@@ -320,7 +324,7 @@ class TensorNetwork:
 
         return new_network
 
-    def accumulating_swipe(self, x, y_true, loss_fn, batch_size=1, num_swipes=1, lr=1.0, method='exact', eps=1e-12, delta=1.0, convergence_criterion=None, orthonormalize=False, verbose=False, skip_right=False, timeout=None, data_device=None, model_device=None, disable_tqdm=None):
+    def accumulating_swipe(self, x, y_true, loss_fn, batch_size=1, num_swipes=1, lr=1.0, method='exact', eps=1e-12, delta=1.0, convergence_criterion=None, orthonormalize=False, verbose=False, skip_right=False, timeout=None, data_device=None, model_device=None, disable_tqdm=None, block_callback=None):
         """Swipes the network to minimize the loss using accumulated A and b over mini-batches.
         Args:
             timeout (float or None): Maximum time in seconds to run. If None, no timeout.
@@ -425,7 +429,11 @@ class TensorNetwork:
 
                     if convergence_criterion(y_preds, y_trues):
                         print('Converged (left pass)')
+                        if block_callback is not None:
+                            block_callback(NS, node_l2r)
                         return True
+                if block_callback is not None:
+                    block_callback(NS, node_l2r)
 
             if skip_right:
                 continue
@@ -507,7 +515,11 @@ class TensorNetwork:
 
                     if convergence_criterion(y_preds, y_trues):
                         print('Converged (right pass)')
+                        if block_callback is not None:
+                            block_callback(NS, node_r2l)
                         return True
+                if block_callback is not None:
+                    block_callback(NS, node_r2l)
 
         return False
 

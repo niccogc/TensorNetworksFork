@@ -216,6 +216,31 @@ class TensorNode:
         self.tensor = self.tensor.expand(*sizes)
         return self
 
+    def get_vertical_nodes(self, exclude=set()):
+        """Returns the nodes in the order they would be contracted vertically, without contracting."""
+        order = []
+        visited = set()
+        queue = [self]
+
+        while queue:
+            current = queue.pop(0)
+            if current in visited:
+                continue
+            visited.add(current)
+            order.append(current)
+            # Sort connections by priority (descending)
+            sorted_connections = sorted(
+                current.connections.items(),
+                key=lambda item: current.connection_priority[item[0]],
+                reverse=True
+            )
+            for label, next_node in sorted_connections:
+                if next_node in exclude or next_node in visited:
+                    continue
+                if label not in current.left_labels + current.right_labels:
+                    queue.append(next_node)
+        return order
+
     def __repr__(self):
         """String representation of the TensorNode."""
         return f"TensorNode(name={self.name}, shape={self.shape}, labels={self.dim_labels})"

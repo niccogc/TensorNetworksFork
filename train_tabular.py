@@ -37,6 +37,7 @@ def main():
     parser.add_argument('--timeout', type=float, default=None, help='Timeout in seconds for training')
     parser.add_argument('--wandb_project', type=str, default=None, help='WandB project name')
     parser.add_argument('--disable_tqdm', action='store_true', help='Disable tqdm progress bars regardless of verbosity')
+    parser.add_argument('--visualize_tn', type=str, default=None, help='Path to save tensor network visualization (e.g., .png)')
     args = parser.parse_args()
 
     # WandB setup
@@ -89,6 +90,15 @@ def main():
             output_shape=output_shape
         ).to(device)
     print('Num params:', layer.num_parameters())
+
+    # Visualize tensor network if requested
+    if args.visualize_tn:
+        from tensor.utils import visualize_tensornetwork
+        import matplotlib.pyplot as plt
+        visualize_tensornetwork(layer.tensor_network)
+        plt.savefig(args.visualize_tn)
+        plt.close()
+        print(f"Tensor network visualization saved to {args.visualize_tn}")
 
     # Bregman function
     X_train_for_bregman = X_train[:64].to(device)

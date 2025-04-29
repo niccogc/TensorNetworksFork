@@ -9,6 +9,30 @@ class TensorNetworkLayer(nn.Module):
         super(TensorNetworkLayer, self).__init__()
         self.tensor_network = tensor_network
         self.labels = labels if labels is not None else tensor_network.output_labels
+        self.parametrized = False
+    
+    def parametrize(self):
+        self.tensor_params = nn.ParameterList()
+        for node in self.tensor_network.train_nodes:
+            self.tensor_params.append(nn.Parameter(node.tensor))
+            node.tensor = self.tensor_params[-1]
+        self.parametrized = True
+    
+    def state_dict(self, *args, **kwargs):
+        """Returns the state dictionary of the layer."""
+        if not self.parametrized:
+            self.parametrize()
+        return super(TensorNetworkLayer, self).state_dict(*args, **kwargs)
+    
+    def load_state_dict(self, state_dict, *args, **kwargs):
+        """Loads the state dictionary into the layer."""
+        if not self.parametrized:
+            self.parametrize()
+        super(TensorNetworkLayer, self).load_state_dict(state_dict, *args, **kwargs)
+        for node, param in zip(self.tensor_network.train_nodes, self.tensor_params):
+            node.tensor = param
+        self.parametrized = True
+        return self
 
     def cuda(self, *args, **kwargs):
         """Moves the layer to the GPU."""
@@ -222,6 +246,7 @@ class TensorConvolutionTrainLayer(TensorNetworkLayer):
         for i in range(1, num_carriages):
             train_blocks[i-1].connect(train_blocks[i], f'r{i+1}')
 
+        # Connect convolution blocks horizontally if convolution_bond > 0
         if convolution_bond > 0:
             for i in range(1, num_carriages):
                 conv_blocks[i-1].connect(conv_blocks[i], f'CB{i+1}')
@@ -240,3 +265,130 @@ class TensorConvolutionTrainLayer(TensorNetworkLayer):
         self.labels = self.output_labels
         tensor_network = TensorNetwork(x_nodes, train_blocks, self.nodes, output_labels=self.labels)
         super(TensorConvolutionTrainLayer, self).__init__(tensor_network)
+
+
+class TensorConvolutionGridTrainLayer(TensorNetworkLayer):
+    def __init__(self, num_carriages, num_layers, bond_dim, layer_bond, num_patches, patch_pixels, output_shape, ring=False, convolution_bond=-1):
+        """Initializes a TensorConvolutionGridTrainLayer."""
+        if ring:
+            raise NotImplementedError("Ring structure is not implemented for TensorConvolutionGridTrainLayer.")
+        self.num_carriages = num_carriages
+        self.num_layers = num_layers
+        self.bond_dim = bond_dim
+        self.layer_bond = layer_bond
+        self.num_patches = num_patches
+        self.output_shape = output_shape if isinstance(output_shape, tuple) else (output_shape,)
+        self.ring = ring
+        self.convolution_bond = convolution_bond
+
+        self.output_labels = ('s',)
+
+        # Create input nodes (x_nodes) and convolution blocks (conv_blocks)
+        x_nodes = []
+        conv_blocks = []
+        for i in range(1, num_carriages+1):
+            x_node = TensorNode((1, num_patches, patch_pixels), ['s', 'patches', 'patch_pixels'], name=f"X{i}")
+            if convolution_bond > 0:
+                conv_block = TensorNode(
+                    (convolution_bond if i != 1 else 1, patch_pixels, convolution_bond if i != num_carriages else 1),
+                    [f'CB{i}', 'patch_pixels', f'CB{i+1}'],
+                    l=f'CB{i}', r=f'CB{i+1}', name=f"C{i}"
+                )
+            else:
+                conv_block = TensorNode((patch_pixels,), ['patch_pixels'], name=f"C{i}")
+            x_nodes.append(x_node)
+            conv_blocks.append(conv_block)
+
+        # Create grid of train_blocks: shape [num_layers][num_carriages]
+        train_blocks = []
+        for l in range(num_layers):
+            layer_blocks = []
+            for i in range(1, num_carriages+1):
+                # Only top layer gets output dims (c) and others get c_dim=1
+                if l == num_layers - 1:
+                    c_dim = self.output_shape[i-1] if i <= len(self.output_shape) else 1
+                    c_label = f'c{i}' if i <= len(self.output_shape) else 'c'
+                else:
+                    c_dim = 1
+                    c_label = 'c'
+                left_bond = bond_dim if i != 1 else 1
+                right_bond = bond_dim if i != num_carriages else 1
+                if l == 0:
+                    up_bond = layer_bond if num_layers > 1 else 1
+                    labels = [f'v{l}_{i}', f'r{l}_{i}', c_label, 'patches', f'r{l}_{i+1}', f'v{l+1}_{i}']
+                    shape = (
+                        1,
+                        left_bond,
+                        c_dim,
+                        num_patches,
+                        right_bond,
+                        up_bond
+                    )
+                else:
+                    up_bond = layer_bond if l < num_layers-1 else 1
+                    down_bond = layer_bond
+                    labels = [f'v{l}_{i}', f'r{l}_{i}', c_label, f'r{l}_{i+1}', f'v{l+1}_{i}']
+                    shape = (
+                        down_bond,
+                        left_bond,
+                        c_dim,
+                        right_bond,
+                        up_bond
+                    )
+                l_label = f'r{l}_{i}'
+                r_label = f'r{l}_{i+1}'
+                block = TensorNode(shape, labels, l=l_label, r=r_label, name=f"A{l}_{i}")
+                layer_blocks.append(block)
+            train_blocks.append(layer_blocks)
+
+        # Connect horizontally within each layer
+        for l in range(num_layers):
+            for i in range(1, num_carriages):
+                train_blocks[l][i-1].connect(train_blocks[l][i], f'r{l}_{i+1}', priority=1)
+
+        # Connect vertically between layers
+        for l in range(num_layers-1):
+            for i in range(num_carriages):
+                train_blocks[l][i].connect(train_blocks[l+1][i], f'v{l+1}_{i+1}', priority=10)
+
+        # Connect bottom layer train_blocks to x_nodes and conv_blocks
+        for i in range(num_carriages):
+            x_nodes[i].connect(train_blocks[0][i], 'patches')
+            conv_blocks[i].connect(x_nodes[i], 'patch_pixels')
+
+        # Connect convolution blocks horizontally if convolution_bond > 0
+        if convolution_bond > 0:
+            for i in range(1, num_carriages):
+                conv_blocks[i-1].connect(conv_blocks[i], f'CB{i+1}')
+
+        # Squeeze singleton dims
+        for l in range(num_layers):
+            for block in train_blocks[l]:
+                block.squeeze()
+        for cb in conv_blocks:
+            cb.squeeze()
+
+        # Set output labels for top layer train_blocks, using c{i} for each output dim
+        self.output_labels = ('s',)
+        for i in range(1, num_carriages+1):
+            if (num_layers > 0) and (i <= len(self.output_shape)):
+                self.output_labels = self.output_labels + (f'c{i}',)
+
+        # Order nodes: for each column, bottom to top (conv_block, then train_blocks)
+        self.nodes = []
+        for i in range(num_carriages):
+            self.nodes.append(conv_blocks[i])
+            for l in range(num_layers):
+                self.nodes.append(train_blocks[l][i])
+
+        # Save for reference
+        self.x_nodes = x_nodes
+        self.conv_blocks = conv_blocks
+        self.train_blocks = train_blocks
+        self.labels = self.output_labels
+
+        # Main nodes are the top layer train_blocks
+        main_nodes = [train_blocks[-1][i] for i in range(num_carriages)]
+        # Create a TensorNetwork
+        tensor_network = TensorNetwork(x_nodes, main_nodes, self.nodes, output_labels=self.labels)
+        super(TensorConvolutionGridTrainLayer, self).__init__(tensor_network)
