@@ -47,5 +47,6 @@ out = {
     'X_test': X_test,
     'y_test': y_test
 }
+
 torch.save(out, '../data/wecperth100.pt')
 print('Saved higgs dataset to ../data/wecperth100.pt')
