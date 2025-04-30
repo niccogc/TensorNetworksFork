@@ -45,5 +45,6 @@ out = {
     'X_test': X_test,
     'y_test': y_test
 }
+
 torch.save(out, '../data/energyprediction_tensor.pt')
 print('Saved energyprediction dataset to ../data/energyprediction_tensor.pt')
