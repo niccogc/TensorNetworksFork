@@ -81,19 +81,43 @@ class TensorNetwork:
 
     def compute_jacobian_stack(self, node) -> TensorNode:
         """Computes the jacobian of a node by contracting all non-left/right connections separately."""
-        contracted_nodes = [next_node.contract_vertically(exclude={node}) for label, next_node in node.connections.items() if label not in node.left_labels + node.right_labels]
+        contracted_nodes = []
+        for label, next_node in node.connections.items():
+            if label not in node.left_labels + node.right_labels:
+                vertical_nodes = next_node.get_vertical_nodes(exclude={node})
+                if not vertical_nodes:
+                    continue
+                contracted = vertical_nodes[0]
+                for vnode in vertical_nodes[1:]:
+                    contracted = contracted.contract_with(vnode, vnode.get_connecting_labels(contracted))
+                contracted_nodes.append(contracted)
 
         left_stack, right_stack = self.get_stacks(node)
         contracted_order = []
-        if left_stack:
-            contracted_order.append(left_stack)
-        contracted_order.extend(contracted_nodes)
-        if right_stack:
-            contracted_order.append(right_stack)
 
-        contracted = contracted_order[0]
-        for i in range(1, len(contracted_order)):
-            contracted = contracted.contract_with(contracted_order[i], contracted_order[i].get_connecting_labels(contracted))
+        # Contract left_stack with first contracted node if both exist
+        if left_stack and contracted_nodes:
+            contracted = left_stack.contract_with(contracted_nodes[0], contracted_nodes[0].get_connecting_labels(left_stack))
+            start_idx = 1
+        elif left_stack:
+            contracted = left_stack
+            start_idx = 0
+        elif contracted_nodes:
+            contracted = contracted_nodes[0]
+            start_idx = 1
+        else:
+            contracted = None
+            start_idx = 0
+
+        # Contract remaining contracted_nodes
+        for i in range(start_idx, len(contracted_nodes)):
+            contracted = contracted.contract_with(contracted_nodes[i], contracted_nodes[i].get_connecting_labels(contracted))
+
+        # Contract with right_stack if it exists
+        if contracted is not None and right_stack:
+            contracted = contracted.contract_with(right_stack, right_stack.get_connecting_labels(contracted))
+        elif right_stack:
+            contracted = right_stack
 
         return contracted
 
@@ -104,48 +128,101 @@ class TensorNetwork:
         if self.left_stacks is None or self.right_stacks is None:
             self.recompute_all_stacks()
         node = self.main_nodes[0]
-        contracted = node.contract_vertically()
+        vertical_nodes = node.get_vertical_nodes()
         left_stack, right_stack = self.get_stacks(node)
+
+        # Start with the main node (vertical_nodes[0])
+        contracted = vertical_nodes[0]
+
+        # Contract with left stack if it exists
         if left_stack:
-            contracted = left_stack.contract_with(contracted, left_stack.right_labels)
+            contracted = contracted.contract_with(left_stack, left_stack.get_connecting_labels(contracted))
+        # Contract with right stack if it exists
         if right_stack:
-            contracted = right_stack.contract_with(contracted, right_stack.left_labels)
+            contracted = contracted.contract_with(right_stack, right_stack.get_connecting_labels(contracted))
+
+        # Continue contracting with the rest of the vertical nodes
+        for vnode in vertical_nodes[1:]:
+            contracted = contracted.contract_with(vnode, vnode.get_connecting_labels(contracted))
+
         return contracted
 
     def node_forward(self, node):
         """Computes the forward pass of the network starting from the given node."""
         if self.left_stacks is None or self.right_stacks is None:
             self.recompute_all_stacks()
-        contracted = node.contract_vertically()
+        vertical_nodes = node.get_vertical_nodes()
         left_stack, right_stack = self.get_stacks(node)
-        if left_stack:
-            contracted = left_stack.contract_with(contracted, left_stack.right_labels)
-        if right_stack:
-            contracted = right_stack.contract_with(contracted, right_stack.left_labels)
+
+        if left_stack and vertical_nodes:
+            contracted = left_stack.contract_with(vertical_nodes[0], vertical_nodes[0].get_connecting_labels(left_stack))
+            start_idx = 1
+        elif left_stack:
+            contracted = left_stack
+            start_idx = 0
+        elif vertical_nodes:
+            contracted = vertical_nodes[0]
+            start_idx = 1
+        else:
+            contracted = None
+            start_idx = 0
+
+        for i in range(start_idx, len(vertical_nodes)):
+            contracted = contracted.contract_with(vertical_nodes[i], vertical_nodes[i].get_connecting_labels(contracted))
+
+        if contracted is not None and right_stack:
+            contracted = contracted.contract_with(right_stack, right_stack.get_connecting_labels(contracted))
+        elif right_stack:
+            contracted = right_stack
+
         return contracted
 
     def left_update_stacks(self, node):
         """Updates the left stacks."""
         index = self.node_indices[node]
-
-        # Use the previously computed left_stack of the node just before `node` as the base, if it exists.
         previous_stack = self.left_stacks[self.main_nodes[index - 1]] if index > 0 else None
-        contracted = node.contract_vertically()
-        if previous_stack is not None:
-            connect_labels = contracted.get_connecting_labels(previous_stack)
-            contracted = previous_stack.contract_with(contracted, connect_labels)
+        vertical_nodes = node.get_vertical_nodes()
+
+        if previous_stack and vertical_nodes:
+            contracted = previous_stack.contract_with(vertical_nodes[0], vertical_nodes[0].get_connecting_labels(previous_stack))
+            start_idx = 1
+        elif previous_stack:
+            contracted = previous_stack
+            start_idx = 0
+        elif vertical_nodes:
+            contracted = vertical_nodes[0]
+            start_idx = 1
+        else:
+            contracted = None
+            start_idx = 0
+
+        for i in range(start_idx, len(vertical_nodes)):
+            contracted = contracted.contract_with(vertical_nodes[i], vertical_nodes[i].get_connecting_labels(contracted))
+
         self.left_stacks[node] = contracted
 
     def right_update_stacks(self, node):
         """Updates the right stacks."""
         index = self.node_indices[node]
-
-        # Use the previously computed right_stack of the node just after `node` as the base, if it exists.
         previous_stack = self.right_stacks[self.main_nodes[index + 1]] if index < len(self.main_nodes) - 1 else None
-        contracted = node.contract_vertically()
-        if previous_stack is not None:
-            connect_labels = previous_stack.get_connecting_labels(contracted)
-            contracted = contracted.contract_with(previous_stack, connect_labels)
+        vertical_nodes = node.get_vertical_nodes()
+
+        if previous_stack and vertical_nodes:
+            contracted = previous_stack.contract_with(vertical_nodes[0], vertical_nodes[0].get_connecting_labels(previous_stack))
+            start_idx = 1
+        elif previous_stack:
+            contracted = previous_stack
+            start_idx = 0
+        elif vertical_nodes:
+            contracted = vertical_nodes[0]
+            start_idx = 1
+        else:
+            contracted = None
+            start_idx = 0
+
+        for i in range(start_idx, len(vertical_nodes)):
+            contracted = contracted.contract_with(vertical_nodes[i], vertical_nodes[i].get_connecting_labels(contracted))
+
         self.right_stacks[node] = contracted
 
     @torch.no_grad()

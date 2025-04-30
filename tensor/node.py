@@ -20,6 +20,8 @@ class TensorNode:
 
     def contract_with(self, other_node, contract_labels):
         """Contracts self with other_node over given dimensions, transferring priorities."""
+        if self is other_node:
+            return self
         contract_labels = [contract_labels] if isinstance(contract_labels, str) else contract_labels
 
         # Generate Einstein summation notation
@@ -60,7 +62,6 @@ class TensorNode:
                 else:
                     node.connection_priority[label] = other_node.connection_priority[label]
                 node.connections[label] = connected_node
-
         return node
 
     def cuda(self):
