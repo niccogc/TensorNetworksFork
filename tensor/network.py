@@ -733,7 +733,6 @@ class TensorNetwork:
 
                 # Precompute batches of HJ and b for this node
                 b_rhs = torch.zeros_like(node.tensor)
-                A_mm = None
                 d_losss = []
                 dd_losss = []
                 loss_total = 0.0
@@ -746,12 +745,8 @@ class TensorNetwork:
                     y_pred = self.forward(x_batch).permute_first(*self.output_labels).tensor
                     loss, d_loss, sqd_loss = loss_fn.forward(y_pred, y_batch)
 
-                    A_m, b_vec, _ = self.get_A_b(node, d_loss, sqd_loss)
+                    b_vec = self.get_b(node, d_loss)
                     b_rhs.add_(b_vec)
-                    if A_mm is None:
-                        A_mm = A_m
-                    else:
-                        A_mm = A_mm + A_m
                     
                     d_losss.append(d_loss)
                     dd_losss.append(sqd_loss)
@@ -913,4 +908,54 @@ class TensorNetwork:
                 self.left_update_stacks(node)
                 if block_callback is not None:
                     block_callback(NS, node)
+        return True
+    
+
+    def grad_swipe(self, x, y_true, loss_fn, batch_size=1, num_swipes=1, lr=1.0, num_iter=100, verbose=False, timeout=None, data_device=None, model_device=None, disable_tqdm=None, block_callback=None):
+        data_size = len(x) if isinstance(x, torch.Tensor) else x[0].shape[0]
+        if batch_size <= 0:
+            batch_size = data_size
+        batches = (data_size + batch_size - 1) // batch_size
+
+        start_time = time.time() if timeout is not None else None
+
+        def move_batch(batch):
+            if model_device is not None and data_device is not None and data_device != model_device:
+                if isinstance(batch, torch.Tensor):
+                    return batch.to(model_device, non_blocking=True)
+                elif isinstance(batch, (list, tuple)):
+                    return [b.to(model_device, non_blocking=True) for b in batch]
+            return batch
+
+        if disable_tqdm is None:
+            disable_tqdm = int(verbose) < 2
+
+        for NS in range(num_swipes):
+            for node in self.train_nodes:
+                for i in tqdm(range(num_iter)):
+                    if timeout is not None and (time.time() - start_time) > timeout:
+                        print(f"Timeout reached ({timeout} seconds). Stopping lanczos_swipe.")
+                        return False
+
+                    # Precompute batches of HJ and b for this node
+                    b_rhs = torch.zeros_like(node.tensor)
+                    loss_total = 0.0
+                    for b in range(batches):
+                        x_batch = x[b*batch_size:(b+1)*batch_size] if isinstance(x, torch.Tensor) else [x[i][b*batch_size:(b+1)*batch_size] for i in range(len(x))]
+                        y_batch = y_true[b*batch_size:(b+1)*batch_size]
+                        x_batch = move_batch(x_batch)
+                        y_batch = move_batch(y_batch)
+
+                        y_pred = self.forward(x_batch).permute_first(*self.output_labels).tensor
+                        loss, d_loss, sqd_loss = loss_fn.forward(y_pred, y_batch)
+
+                        b_vec = self.get_b(node, d_loss)
+                        b_rhs.add_(b_vec)
+                        loss_total += loss.mean().item()
+                        
+                    step_tensor = -b_rhs / batches
+                    node.update_node(step_tensor, lr=lr)
+                    self.left_update_stacks(node)
+                    if block_callback is not None:
+                        block_callback(NS, node, loss_total / batches)
         return True

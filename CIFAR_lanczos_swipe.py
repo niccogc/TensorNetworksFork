@@ -93,12 +93,12 @@ if __name__ == "__main__":
         "num_params": layer.num_parameters(),
     })
 
-    def convergence_criterion(*args):
+    def convergence_criterion(NS, node):
         y_pred_test = layer(xinp_test)
         y_pred_test = torch.cat((y_pred_test, torch.zeros_like(y_pred_test[:, :1])), dim=1)
         accuracy_test = balanced_accuracy_score(y_test.argmax(dim=-1).cpu().numpy(), y_pred_test.argmax(dim=-1).cpu().numpy())
-        print('Test Acc:', accuracy_test)
-        wandb.log({"test_accuracy": accuracy_test})
+        print(NS, node.name, 'Test Acc:', accuracy_test)
+        wandb.log({"test_accuracy": accuracy_test,"swipe": NS})
         return False
     
     def loss_callback(loss):

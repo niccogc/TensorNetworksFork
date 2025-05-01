@@ -2,8 +2,8 @@
 import torch
 
 # Set parameters
-N = 100000         # number of samples
-D = b_vec.shape[0]          # feature dimension (can vary!)
+N = 100         # number of samples
+D = 20          # feature dimension (can vary!)
 batch_size = 10 # batch size
 max_iter = 50   # max Lanczos steps
 tol = 1e-6      # tolerance for residual
@@ -19,18 +19,19 @@ setbatch = [(vecset[i*batch_size:(i+1)*batch_size],
             for i in range(N // batch_size)]
 
 # Build A matrix: A = sum_s ddlos_s * (vec_s ⊗ vec_s)
-A = A_M.cpu()#torch.einsum("si,sj,s->ij", vecset, vecset, ddlos)
+A = torch.einsum("si,sj,s->ij", vecset, vecset, ddlos)
 
 # Solve direct reference solution
-rhs_full = -b_vec.cpu()#torch.rand((D,))#vecsol.sum(0)
+rhs_full = (vecsol * ddlos.unsqueeze(1)).sum(0)
 x_true = torch.linalg.solve(A, rhs_full)
 print("Reference solution x_true computed.")
 
 # %%
 # Helper functions
-def Hv(v):
+def Hv(vecbatch, ddbatch, v):
     """Apply weighted matrix to vector."""
-    return A @ v
+    coeff = torch.einsum("si, i -> s", vecbatch, v)   # size (batch,)
+    return (vecbatch * (coeff * ddbatch).unsqueeze(1)).sum(0)
 
 def V(veclist):
     """Stack a list of vectors as columns."""
@@ -54,9 +55,9 @@ b = [0.0]              # b[0] unused dummy
 x0 = torch.rand(D)    # random initial guess
 
 # Compute initial residual r0 = rhs_full - A @ x0
-Hx0 = Hv(x0)
-#for vecbatch, ddbatch in setbatch:
-    #Hx0 += Hv(vecbatch, ddbatch, x0)
+Hx0 = 0
+for vecbatch, ddbatch in setbatch:
+    Hx0 += Hv(vecbatch, ddbatch, x0)
 r0 = rhs_full - Hx0
 
 b1 = torch.norm(r0)
@@ -66,7 +67,9 @@ v.append(v1)
 
 for j in range(1, max_iter+1):
     # Apply H to v[j]
-    Hv1 = Hv(v[j])
+    Hv1 = 0
+    for vecbatch, ddbatch in setbatch:
+        Hv1 += Hv(vecbatch, ddbatch, v[j])
 
     v2 = Hv1 - b[j] * v[j-1]
     a1 = torch.dot(v2, v[j])

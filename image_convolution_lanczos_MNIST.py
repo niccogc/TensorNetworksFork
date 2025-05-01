@@ -1,6 +1,6 @@
 #%%
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "3"
 import torch
 import torchvision
 import torchvision.transforms as transforms
@@ -59,15 +59,17 @@ num_swipes = 10
 epss = np.geomspace(1.0, 1e-2, 2*num_swipes).tolist()
 plt.plot(epss)
 
-N = 7
-r = 8
+N = 3
+r = 10
 CB = 4
+batch_size = 512
+max_iter = 500
 
-def convergence_criterion(*args):
+def convergence_criterion(NS, node):
     y_pred_test = layer(xinp_test)
     y_pred_test = torch.cat((y_pred_test, torch.zeros_like(y_pred_test[:, :1])), dim=1)
     accuracy_test = balanced_accuracy_score(y_test.argmax(dim=-1).cpu().numpy(), y_pred_test.argmax(dim=-1).cpu().numpy())
-    print('Test Acc:', accuracy_test)
+    print(NS, node.name,'Test Acc:', accuracy_test)
     return False
 
 # Define Bregman function
@@ -83,5 +85,9 @@ with torch.inference_mode():
     #del y_pred
 bf = XEAutogradBregman(w=w)
 #%%
-layer.tensor_network.accumulating_swipe(xinp_train, y_train, bf, batch_size=512, delta=3.0, lr=1.0, convergence_criterion=convergence_criterion, orthonormalize=False, method='ridge_exact', eps=epss, verbose=2, num_swipes=num_swipes)
+def loss_callback(loss):
+    print("loss", loss)
+    return False
+
+layer.tensor_network.lanczos_swipe(xinp_train, y_train, bf, batch_size=batch_size, num_swipes=num_swipes, lr=1.0, max_iter=max_iter, verbose=2, block_callback=convergence_criterion, loss_callback=loss_callback)
 #%%

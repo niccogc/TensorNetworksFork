@@ -1,6 +1,6 @@
 #%%
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "3"
 import torch
 import torchvision
 import torchvision.transforms as transforms
@@ -23,8 +23,8 @@ for images, labels in train_loader:
 xinp_train = torch.cat(train_samples, dim=0)
 y_train = torch.cat(train_labels, dim=0)
 
-KERNEL_SIZE = 4
-STRIDE = 4
+KERNEL_SIZE = 7
+STRIDE = 7
 
 xinp_train = F.unfold(xinp_train, kernel_size=(KERNEL_SIZE,KERNEL_SIZE), stride=(STRIDE,STRIDE), padding=0).transpose(-2, -1)
 xinp_train = torch.cat((xinp_train, torch.zeros((xinp_train.shape[0], 1, xinp_train.shape[2]), device=xinp_train.device)), dim=-2).cuda()
@@ -55,13 +55,13 @@ from sklearn.metrics import balanced_accuracy_score
 import numpy as np
 from matplotlib import pyplot as plt
 
-num_swipes = 10
-epss = np.geomspace(1.0, 1e-2, 2*num_swipes).tolist()
+num_swipes = 2
+epss = np.geomspace(1.0, 1e-3, 2*num_swipes).tolist()
 plt.plot(epss)
 
-N = 7
-r = 8
-CB = 4
+N = 3
+r = 24
+CB = 8
 
 def convergence_criterion(*args):
     y_pred_test = layer(xinp_test)
@@ -83,5 +83,12 @@ with torch.inference_mode():
     #del y_pred
 bf = XEAutogradBregman(w=w)
 #%%
-layer.tensor_network.accumulating_swipe(xinp_train, y_train, bf, batch_size=512, delta=3.0, lr=1.0, convergence_criterion=convergence_criterion, orthonormalize=False, method='ridge_exact', eps=epss, verbose=2, num_swipes=num_swipes)
+layer.tensor_network.accumulating_swipe(xinp_train, y_train, bf, batch_size=1024, delta=3.0, lr=1.0, convergence_criterion=convergence_criterion, orthonormalize=False, method='ridge_exact', eps=epss, verbose=2, num_swipes=num_swipes)
+#%%
+def block_callback(NS, node, total_loss):
+    y_pred_test = layer(xinp_test)
+    y_pred_test = torch.cat((y_pred_test, torch.zeros_like(y_pred_test[:, :1])), dim=1)
+    accuracy_test = balanced_accuracy_score(y_test.argmax(dim=-1).cpu().numpy(), y_pred_test.argmax(dim=-1).cpu().numpy())
+    print(NS, node.name, 'Test Acc:', accuracy_test, 'Loss:', total_loss)
+layer.tensor_network.grad_swipe(xinp_train, y_train, bf, num_iter=1000, batch_size=1024, lr=5e-5, verbose=2, num_swipes=num_swipes, block_callback=block_callback)
 #%%
