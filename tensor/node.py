@@ -120,7 +120,7 @@ class TensorNode:
         """Sums the tensor over the given labels."""
         if isinstance(labels, str):
             labels = [labels]
-        indices = [self.dim_labels.index(label) for label in labels]
+        indices = [self.dim_labels.index(label) for label in labels if label in self.dim_labels]
         return self.tensor.sum(indices)
 
     def squeeze(self, exclude=set()):
@@ -176,14 +176,18 @@ class TensorNode:
         self.tensor = tensor
         return self
 
-    def permute_first(self, *labels):
+    def permute_first(self, *labels, expand=True):
         """Permutes the tensor so that the given labels are first."""
         new_labels = list(labels) + [l for l in self.dim_labels if l not in labels]
+        if not expand:
+            new_labels = [l for l in new_labels if l in self.dim_labels]
         permute = [self.dim_labels.index(l) for l in new_labels if l in self.dim_labels]
-        self.tensor = self.tensor.permute(*permute)
-        for l in labels:
-            if l not in self.dim_labels:
-                self.tensor = self.tensor.unsqueeze(new_labels.index(l))
+        if permute:
+            self.tensor = self.tensor.permute(*permute)
+        if expand:
+            for l in labels:
+                if l not in self.dim_labels:
+                    self.tensor = self.tensor.unsqueeze(new_labels.index(l))
         self.dim_labels = new_labels
         return self
 
@@ -239,6 +243,7 @@ class TensorNode:
                 if next_node in exclude or next_node in visited:
                     continue
                 if label not in current.left_labels + current.right_labels:
+                    print('HERE', current, label, current.left_labels, current.right_labels)
                     queue.append(next_node)
         return order
 

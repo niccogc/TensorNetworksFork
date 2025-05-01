@@ -213,6 +213,7 @@ class TensorConvolutionTrainLayer(TensorNetworkLayer):
         self.num_carriages = num_carriages
         self.bond_dim = bond_dim
         self.num_patches = num_patches
+        self.patch_pixels = patch_pixels
         self.output_shape = output_shape if isinstance(output_shape, tuple) else (output_shape,)
         self.ring = ring
         self.convolution_bond = convolution_bond
@@ -265,7 +266,63 @@ class TensorConvolutionTrainLayer(TensorNetworkLayer):
         self.labels = self.output_labels
         tensor_network = TensorNetwork(x_nodes, train_blocks, self.nodes, output_labels=self.labels)
         super(TensorConvolutionTrainLayer, self).__init__(tensor_network)
+    
+    def grow_cart(self, new_bond=None, new_convolution_bond=None):
+        x_node_new = TensorNode(
+            (1, self.num_patches, self.patch_pixels),
+            ['s', 'patches', 'patch_pixels'],
+            name=f"X{self.num_carriages+1}"
+        )
+        
+        if new_bond is None:
+            new_bond = self.bond_dim
 
+        if new_convolution_bond is None:
+            new_convolution_bond = self.convolution_bond
+
+        train_tensor_new = torch.zeros((new_bond, 1, self.num_patches, 1))
+        train_tensor_new[:, :, -1] = 1/new_bond
+        train_block_new = TensorNode(
+            train_tensor_new,
+            [f'r{self.num_carriages+1}', f'c{self.num_carriages+1}', 'patches', f'r{self.num_carriages+2}'],
+            l=f'r{self.num_carriages+1}', r=f'r{self.num_carriages+2}', name=f"A{self.num_carriages+1}"
+        )
+
+        # Connect new train block to x_node
+        x_node_new.connect(train_block_new, 'patches')
+
+        if new_convolution_bond > 0:
+            conv_block_new = TensorNode(
+                (new_convolution_bond if self.num_carriages != 1 else 1, self.patch_pixels, new_convolution_bond if self.num_carriages != self.num_carriages else 1),
+                [f'CB{self.num_carriages+1}', 'patch_pixels', f'CB{self.num_carriages+2}'],
+                l=f'CB{self.num_carriages+1}', r=f'CB{self.num_carriages+2}', name=f"C{self.num_carriages+1}"
+            )
+        else:
+            conv_block_new = TensorNode(
+                (self.patch_pixels,),
+                ['patch_pixels'],
+                name=f"C{self.num_carriages+1}"
+            )
+
+        # Connect new conv block to x_node
+        x_node_new.connect(conv_block_new, 'patch_pixels')
+        self.x_nodes.append(x_node_new)
+
+        # Expand last node
+        self.train_blocks[-1].expand_labels(self.train_blocks[-1].dim_labels + [f'r{self.num_carriages+1}'], self.train_blocks[-1].shape + (new_bond,))
+        train_block_new.connect(self.train_blocks[-1], f'r{self.num_carriages+1}')
+        train_block_new.squeeze()
+        self.train_blocks.append(train_block_new)
+        
+        if new_convolution_bond > 0:
+            self.conv_blocks[-1].expand_labels(self.conv_blocks[-1].dim_labels + [f'CB{self.num_carriages+1}'], self.conv_blocks[-1].shape + (new_convolution_bond,))
+            self.conv_blocks[-1].connect(conv_block_new, f'CB{self.num_carriages+1}')
+        conv_block_new.squeeze()
+        self.conv_blocks.append(conv_block_new)
+        
+        self.num_carriages += 1
+
+        self.tensor_network = TensorNetwork(self.x_nodes, self.train_blocks, self.tensor_network.train_nodes + [conv_block_new, train_block_new], output_labels=self.labels)
 
 class TensorConvolutionGridTrainLayer(TensorNetworkLayer):
     def __init__(self, num_carriages, num_layers, bond_dim, layer_bond, num_patches, patch_pixels, output_shape, ring=False, convolution_bond=-1):

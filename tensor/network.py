@@ -1,4 +1,5 @@
 import torch
+from torch import nn
 import string
 from collections import deque
 from tensor.node import TensorNode
@@ -47,7 +48,7 @@ class TensorNetwork:
 
         return list(sorted(discovered, key=lambda n: n.name)), node_indices
 
-    def compute_stack(self, direction="left", exclude_nodes=set()):
+    def compute_stacks(self, direction="left", exclude_nodes=set()):
         """Computes left or right stacks iteratively."""
         stack_dict = {}
         nodes = self.main_nodes if direction == "left" else reversed(self.main_nodes)
@@ -55,12 +56,10 @@ class TensorNetwork:
         prev_stack = None
 
         for node in nodes:
-            if prev_stack is not None:
-                contracted = prev_stack
-            else:
-                contracted = node
-            vertical_nodes = node.get_vertical_nodes(exclude=exclude_nodes)
-            for vnode in vertical_nodes:
+            column_nodes = [node] + self.get_column_nodes(node)
+            node_iter = iter(column_nodes)
+            contracted = next(node_iter) if prev_stack is None else prev_stack
+            for vnode in node_iter:
                 contracted = contracted.contract_with(vnode, vnode.get_connecting_labels(contracted))
             stack_dict[node] = contracted
             prev_stack = contracted
@@ -69,8 +68,8 @@ class TensorNetwork:
 
     def recompute_all_stacks(self, exclude_nodes=set()):
         """Computes left and right stacks for each node."""
-        self.left_stacks = self.compute_stack("left", exclude_nodes)
-        self.right_stacks = self.compute_stack("right", exclude_nodes)
+        self.left_stacks = self.compute_stacks("left", exclude_nodes)
+        self.right_stacks = self.compute_stacks("right", exclude_nodes)
 
     def get_stacks(self, node):
         """Returns the left and right stacks for the given node."""
@@ -79,46 +78,29 @@ class TensorNetwork:
         right_stack = self.right_stacks[self.main_nodes[index + 1]] if index < len(self.main_nodes) - 1 else None
         return left_stack, right_stack
 
+    def get_column_nodes(self, node):
+        """Returns the column nodes for the given index."""
+        column_nodes = []
+        index = self.node_indices[node]
+        for n, i in self.node_indices.items():
+            if n is node:
+                continue
+            if i == index:
+                column_nodes.append(n)
+        return column_nodes
+
     def compute_jacobian_stack(self, node) -> TensorNode:
         """Computes the jacobian of a node by contracting all non-left/right connections separately."""
-        contracted_nodes = []
-        for label, next_node in node.connections.items():
-            if label not in node.left_labels + node.right_labels:
-                vertical_nodes = next_node.get_vertical_nodes(exclude={node})
-                if not vertical_nodes:
-                    continue
-                contracted = vertical_nodes[0]
-                for vnode in vertical_nodes[1:]:
-                    contracted = contracted.contract_with(vnode, vnode.get_connecting_labels(contracted))
-                contracted_nodes.append(contracted)
-
+        
         left_stack, right_stack = self.get_stacks(node)
-        contracted_order = []
-
-        # Contract left_stack with first contracted node if both exist
-        if left_stack and contracted_nodes:
-            contracted = left_stack.contract_with(contracted_nodes[0], contracted_nodes[0].get_connecting_labels(left_stack))
-            start_idx = 1
-        elif left_stack:
-            contracted = left_stack
-            start_idx = 0
-        elif contracted_nodes:
-            contracted = contracted_nodes[0]
-            start_idx = 1
-        else:
-            contracted = None
-            start_idx = 0
-
-        # Contract remaining contracted_nodes
-        for i in range(start_idx, len(contracted_nodes)):
-            contracted = contracted.contract_with(contracted_nodes[i], contracted_nodes[i].get_connecting_labels(contracted))
-
-        # Contract with right_stack if it exists
-        if contracted is not None and right_stack:
+        column_nodes = self.get_column_nodes(node)
+        node_iter = iter(column_nodes)
+        contracted = next(node_iter) if left_stack is None else left_stack
+        for vnode in node_iter:
+            contracted = contracted.contract_with(vnode, vnode.get_connecting_labels(contracted))
+        if right_stack is not None:
             contracted = contracted.contract_with(right_stack, right_stack.get_connecting_labels(contracted))
-        elif right_stack:
-            contracted = right_stack
-
+        
         return contracted
 
     def forward(self, x):
@@ -128,100 +110,38 @@ class TensorNetwork:
         if self.left_stacks is None or self.right_stacks is None:
             self.recompute_all_stacks()
         node = self.main_nodes[0]
-        vertical_nodes = node.get_vertical_nodes()
+        column_nodes = [node]+self.get_column_nodes(node)
         left_stack, right_stack = self.get_stacks(node)
 
-        # Start with the main node (vertical_nodes[0])
-        contracted = vertical_nodes[0]
+        node_iter = iter(column_nodes)
+        contracted = next(node_iter) if left_stack is None else left_stack
 
-        # Contract with left stack if it exists
-        if left_stack:
-            contracted = contracted.contract_with(left_stack, left_stack.get_connecting_labels(contracted))
-        # Contract with right stack if it exists
-        if right_stack:
-            contracted = contracted.contract_with(right_stack, right_stack.get_connecting_labels(contracted))
-
-        # Continue contracting with the rest of the vertical nodes
-        for vnode in vertical_nodes[1:]:
+        for vnode in node_iter:
             contracted = contracted.contract_with(vnode, vnode.get_connecting_labels(contracted))
-
-        return contracted
-
-    def node_forward(self, node):
-        """Computes the forward pass of the network starting from the given node."""
-        if self.left_stacks is None or self.right_stacks is None:
-            self.recompute_all_stacks()
-        vertical_nodes = node.get_vertical_nodes()
-        left_stack, right_stack = self.get_stacks(node)
-
-        if left_stack and vertical_nodes:
-            contracted = left_stack.contract_with(vertical_nodes[0], vertical_nodes[0].get_connecting_labels(left_stack))
-            start_idx = 1
-        elif left_stack:
-            contracted = left_stack
-            start_idx = 0
-        elif vertical_nodes:
-            contracted = vertical_nodes[0]
-            start_idx = 1
-        else:
-            contracted = None
-            start_idx = 0
-
-        for i in range(start_idx, len(vertical_nodes)):
-            contracted = contracted.contract_with(vertical_nodes[i], vertical_nodes[i].get_connecting_labels(contracted))
-
-        if contracted is not None and right_stack:
+        if right_stack is not None:
             contracted = contracted.contract_with(right_stack, right_stack.get_connecting_labels(contracted))
-        elif right_stack:
-            contracted = right_stack
 
         return contracted
 
     def left_update_stacks(self, node):
         """Updates the left stacks."""
-        index = self.node_indices[node]
-        previous_stack = self.left_stacks[self.main_nodes[index - 1]] if index > 0 else None
-        vertical_nodes = node.get_vertical_nodes()
-
-        if previous_stack and vertical_nodes:
-            contracted = previous_stack.contract_with(vertical_nodes[0], vertical_nodes[0].get_connecting_labels(previous_stack))
-            start_idx = 1
-        elif previous_stack:
-            contracted = previous_stack
-            start_idx = 0
-        elif vertical_nodes:
-            contracted = vertical_nodes[0]
-            start_idx = 1
-        else:
-            contracted = None
-            start_idx = 0
-
-        for i in range(start_idx, len(vertical_nodes)):
-            contracted = contracted.contract_with(vertical_nodes[i], vertical_nodes[i].get_connecting_labels(contracted))
+        previous_stack, _ = self.get_stacks(node)
+        column_nodes = [node]+self.get_column_nodes(node)
+        node_iter = iter(column_nodes)
+        contracted = next(node_iter) if previous_stack is None else previous_stack
+        for vnode in node_iter:
+            contracted = contracted.contract_with(vnode, vnode.get_connecting_labels(contracted))
 
         self.left_stacks[node] = contracted
 
     def right_update_stacks(self, node):
         """Updates the right stacks."""
-        index = self.node_indices[node]
-        previous_stack = self.right_stacks[self.main_nodes[index + 1]] if index < len(self.main_nodes) - 1 else None
-        vertical_nodes = node.get_vertical_nodes()
-
-        if previous_stack and vertical_nodes:
-            contracted = previous_stack.contract_with(vertical_nodes[0], vertical_nodes[0].get_connecting_labels(previous_stack))
-            start_idx = 1
-        elif previous_stack:
-            contracted = previous_stack
-            start_idx = 0
-        elif vertical_nodes:
-            contracted = vertical_nodes[0]
-            start_idx = 1
-        else:
-            contracted = None
-            start_idx = 0
-
-        for i in range(start_idx, len(vertical_nodes)):
-            contracted = contracted.contract_with(vertical_nodes[i], vertical_nodes[i].get_connecting_labels(contracted))
+        _, next_stack = self.get_stacks(node)
+        column_nodes = [node]+self.get_column_nodes(node)
+        node_iter = iter(reversed(column_nodes))
+        contracted = next(node_iter) if next_stack is None else next_stack
+        for vnode in node_iter:
+            contracted = contracted.contract_with(vnode, vnode.get_connecting_labels(contracted))
 
         self.right_stacks[node] = contracted
 
@@ -275,6 +195,83 @@ class TensorNetwork:
         J_sum = J.permute_first(dim_order).sum_labels(broadcast_dims)
         return A, b, J_sum.flatten()
     
+    def get_J(self, node, grad):
+        # Determine broadcast
+        broadcast_dims = tuple(d for d in self.output_labels if d not in node.dim_labels)
+        non_broadcast_dims = tuple(d for d in self.output_labels if d != self.sample_dim)
+        
+        # Compute the Jacobian
+        J = self.compute_jacobian_stack(node)
+        J = J.expand_labels(self.output_labels, grad.shape)
+        J = J.permute_first(*broadcast_dims)
+
+        # Assign unique einsum labels
+        import string
+        all_letters = iter(string.ascii_letters)
+        dim_labels = {dim: next(all_letters) for dim in self.output_labels}  # Assign letters to output dims
+        for d in non_broadcast_dims:
+            dim_labels['_' + d] = next(all_letters)
+
+        d_loss_ein = ''.join(dim_labels[d] for d in self.output_labels)
+        dd_loss_ein = ''.join([dim_labels[self.sample_dim]] + [dim_labels[d] for d in non_broadcast_dims] + [dim_labels['_' + d] for d in non_broadcast_dims])
+        coeff_ein = ''.join([dim_labels[self.sample_dim]] + [dim_labels['_' + d] for d in non_broadcast_dims])
+        J_ein1 = ''
+        J_out1 = []
+        dim_order = []
+        for d in J.dim_labels:
+            if d not in dim_labels and d not in broadcast_dims:
+                dim_labels[d] = next(all_letters)
+                dim_labels['_' + d] = next(all_letters)
+            J_ein1 += dim_labels[d]
+            if d not in broadcast_dims:
+                J_out1.append(dim_labels[d])
+                dim_order.append(d)
+        J_out1 = ''.join([J_out1[dim_order.index(d)] for d in node.dim_labels])
+
+        return {
+            'J': J.permute_first(dim_order, expand=False), 
+            'einsum': J_ein1,
+            'node_ein': J_out1,
+            'dd_loss_ein': dd_loss_ein,
+            'd_loss_ein': d_loss_ein,
+            'coeff_ein': coeff_ein,
+        }
+
+    def get_b(self, node, grad):
+        # Determine broadcast
+        broadcast_dims = tuple(d for d in self.output_labels if d not in node.dim_labels)
+        non_broadcast_dims = tuple(d for d in self.output_labels if d != self.sample_dim)
+
+        # Compute the Jacobian
+        J = self.compute_jacobian_stack(node).expand_labels(self.output_labels, grad.shape).permute_first(*broadcast_dims)
+
+        # Assign unique einsum labels
+        import string
+        all_letters = iter(string.ascii_letters)
+        dim_labels = {dim: next(all_letters) for dim in self.output_labels}  # Assign letters to output dims
+        for d in non_broadcast_dims:
+            dim_labels['_' + d] = next(all_letters)
+
+        d_loss_ein = ''.join(dim_labels[d] for d in self.output_labels)
+        J_ein1 = ''
+        J_out1 = []
+        dim_order = []
+        for d in J.dim_labels:
+            if d not in dim_labels and d not in broadcast_dims:
+                dim_labels[d] = next(all_letters)
+                dim_labels['_' + d] = next(all_letters)
+            J_ein1 += dim_labels[d]
+            if d not in broadcast_dims:
+                J_out1.append(dim_labels[d])
+                dim_order.append(d)
+        J_out1 = ''.join([J_out1[dim_order.index(d)] for d in node.dim_labels])
+        einsum_b = f"{J_ein1},{d_loss_ein}->{J_out1}"
+
+        # Compute einsum operations
+        b = torch.einsum(einsum_b, J.tensor, grad)
+
+        return b
+
     def solve_system(self, node, A, b, J, method='exact', eps=0.0, delta=1e2):
         """Finds the update step for a given node"""
         # Solve the system
@@ -401,7 +398,7 @@ class TensorNetwork:
 
         return new_network
 
-    def accumulating_swipe(self, x, y_true, loss_fn, batch_size=1, num_swipes=1, lr=1.0, method='exact', eps=1e-12, delta=1.0, convergence_criterion=None, orthonormalize=False, verbose=False, skip_right=False, timeout=None, data_device=None, model_device=None, disable_tqdm=None, block_callback=None):
+    def accumulating_swipe(self, x, y_true, loss_fn, batch_size=-1, num_swipes=1, lr=1.0, method='exact', eps=1e-12, delta=1.0, convergence_criterion=None, orthonormalize=False, verbose=False, skip_second=False, timeout=None, data_device=None, model_device=None, disable_tqdm=None, block_callback=None, direction='l2r'):
         """Swipes the network to minimize the loss using accumulated A and b over mini-batches.
         Args:
             timeout (float or None): Maximum time in seconds to run. If None, no timeout.
@@ -435,7 +432,7 @@ class TensorNetwork:
             else:
                 eps_ = eps
             # LEFT TO RIGHT
-            for node_l2r in self.train_nodes:
+            for node_l2r in self.train_nodes if direction == 'l2r' else reversed(self.train_nodes):
                 if node_l2r in self.node_indices and node_r2l in self.node_indices and self.node_indices[node_l2r] == self.node_indices[node_r2l]:
                     continue
                 # Timeout check
@@ -512,7 +509,7 @@ class TensorNetwork:
                 if block_callback is not None:
                     block_callback(NS, node_l2r)
 
-            if skip_right:
+            if skip_second:
                 continue
 
             if isinstance(eps, list):
@@ -521,7 +518,7 @@ class TensorNetwork:
                 eps_ = eps
 
             # RIGHT TO LEFT
-            for node_r2l in reversed(self.train_nodes):
+            for node_r2l in self.train_nodes if direction == 'r2l' else reversed(self.train_nodes):
                 if node_l2r in self.node_indices and node_r2l in self.node_indices and self.node_indices[node_l2r] == self.node_indices[node_r2l]:
                     continue
                 # Timeout check
@@ -598,7 +595,7 @@ class TensorNetwork:
                 if block_callback is not None:
                     block_callback(NS, node_r2l)
 
-        return False
+        return True
 
     def orthonormalize_left(self):
         """
@@ -697,3 +694,223 @@ class TensorNetwork:
 
         if self.left_stacks is not None:
             self.left_update_stacks(prev_node)
+
+    def lanczos_swipe(self, x, y_true, loss_fn, batch_size=1, num_swipes=1, lr=1.0, max_iter=50, tol=1e-6, verbose=False, timeout=None, data_device=None, model_device=None, disable_tqdm=None, block_callback=None, loss_callback=None):
+        """
+        Swipes the network to minimize the loss using the Lanczos algorithm for each node, without forming the full Gramian.
+        Args:
+            max_iter (int): Maximum Lanczos steps per node.
+            tol (float): Residual tolerance for convergence.
+            Other args as in accumulating_swipe.
+        """
+        import torch
+        import time
+        from tqdm.auto import tqdm
+
+        data_size = len(x) if isinstance(x, torch.Tensor) else x[0].shape[0]
+        if batch_size <= 0:
+            batch_size = data_size
+        batches = (data_size + batch_size - 1) // batch_size
+
+        start_time = time.time() if timeout is not None else None
+
+        def move_batch(batch):
+            if model_device is not None and data_device is not None and data_device != model_device:
+                if isinstance(batch, torch.Tensor):
+                    return batch.to(model_device, non_blocking=True)
+                elif isinstance(batch, (list, tuple)):
+                    return [b.to(model_device, non_blocking=True) for b in batch]
+            return batch
+
+        if disable_tqdm is None:
+            disable_tqdm = int(verbose) < 2
+
+        for NS in range(num_swipes):
+            for node in self.train_nodes if NS % 2 == 0 else reversed(self.train_nodes):
+                if timeout is not None and (time.time() - start_time) > timeout:
+                    print(f"Timeout reached ({timeout} seconds). Stopping lanczos_swipe.")
+                    return False
+
+                # Precompute batches of HJ and b for this node
+                b_rhs = torch.zeros_like(node.tensor)
+                A_mm = None
+                d_losss = []
+                dd_losss = []
+                loss_total = 0.0
+                for b in range(batches):
+                    x_batch = x[b*batch_size:(b+1)*batch_size] if isinstance(x, torch.Tensor) else [x[i][b*batch_size:(b+1)*batch_size] for i in range(len(x))]
+                    y_batch = y_true[b*batch_size:(b+1)*batch_size]
+                    x_batch = move_batch(x_batch)
+                    y_batch = move_batch(y_batch)
+
+                    y_pred = self.forward(x_batch).permute_first(*self.output_labels).tensor
+                    loss, d_loss, sqd_loss = loss_fn.forward(y_pred, y_batch)
+
+                    A_m, b_vec, _ = self.get_A_b(node, d_loss, sqd_loss)
+                    b_rhs.add_(b_vec)
+                    if A_mm is None:
+                        A_mm = A_m
+                    else:
+                        A_mm = A_mm + A_m
+                    
+                    d_losss.append(d_loss)
+                    dd_losss.append(sqd_loss)
+                    if loss_callback is not None:
+                        loss_total += loss.mean().item()
+                if loss_callback is not None:
+                    loss_callback(loss_total / batches)
+
+                # Helper: matvec for this node (A @ v)
+                def matvec(v):
+                    Av = 0
+                    for b, d_loss, dd_loss in zip(range(batches), d_losss, dd_losss):
+                        x_batch = x[b*batch_size:(b+1)*batch_size] if isinstance(x, torch.Tensor) else [x[i][b*batch_size:(b+1)*batch_size] for i in range(len(x))]
+                        x_batch = move_batch(x_batch)
+
+
+                        self.set_input(x_batch)
+                        if self.left_stacks is None or self.right_stacks is None:
+                           self.recompute_all_stacks()
+
+                        prep_J = self.get_J(node, d_loss)
+                        J = prep_J['J']
+                        J_einsum = prep_J['einsum']
+                        node_ein = prep_J['node_ein']
+                        d_loss_ein = prep_J['d_loss_ein']
+                        dd_loss_ein = prep_J['dd_loss_ein']
+                        coeff_ein = prep_J['coeff_ein']
+                        coeff = torch.einsum(f"{J_einsum},{node_ein},{dd_loss_ein}->{coeff_ein}", J.tensor, v, dd_loss)
+                        Av += torch.einsum(f"{J_einsum},{d_loss_ein}->{node_ein}", J.tensor, coeff)
+                    return Av
+
+                # Initial guess x0 = zeros
+                x0 = torch.randn_like(b_rhs)
+
+                # Lanczos-Galerkin solver (minimal, 1D case)
+                def lanczos_solver(matvec, b, x0, max_iter, tol):
+                    v = [torch.zeros_like(x0)]
+                    a = [0.0]
+                    b_coeffs = [0.0]
+                    r0 = b - matvec(x0)
+                    beta1 = torch.norm(r0)
+                    b_coeffs.append(beta1)
+                    v1 = r0 / beta1
+                    v.append(v1)
+                    for j in tqdm(range(1, max_iter+1)):
+                        w = matvec(v[j]) - b_coeffs[j] * v[j-1]
+                        a_j = (w*v[j]).sum()
+                        a.append(a_j)
+                        w = w - a_j * v[j]
+                        beta_j1 = torch.norm(w)
+                        b_coeffs.append(beta_j1)
+                        v.append(w / beta_j1)
+                        #if beta_j1 < tol:
+                        #    break
+                    Vm = torch.stack(v[1:j+1], dim=-1)  # (n, m)
+                    Tm = torch.diag(torch.tensor(a[1:], device=x0.device, dtype=x0.dtype))
+                    if len(a) > 2:
+                        Tm += torch.diag(torch.tensor(b_coeffs[2:j+1], device=x0.device, dtype=x0.dtype), diagonal=1)
+                        Tm += torch.diag(torch.tensor(b_coeffs[2:j+1], device=x0.device, dtype=x0.dtype), diagonal=-1)
+                    rhs = torch.zeros(len(a)-1, device=x0.device, dtype=x0.dtype)
+                    rhs[0] = beta1
+                    y = torch.linalg.solve(Tm, rhs)
+                    x = x0 + Vm @ y
+                    return x
+
+                # Solve for update step
+                step_tensor = lanczos_solver(matvec, -b_rhs, x0, max_iter, tol)
+                node.update_node(step_tensor, lr=lr)
+                self.left_update_stacks(node)
+                if block_callback is not None:
+                    block_callback(NS, node)
+        return True
+    
+    def gradient_swipe(self, x, y_true, loss_fn, batch_size=1, num_swipes=1, lr=1.0, max_iter=50, tol=1e-6, verbose=False, timeout=None, data_device=None, model_device=None, disable_tqdm=None, block_callback=None):
+        data_size = len(x) if isinstance(x, torch.Tensor) else x[0].shape[0]
+        if batch_size <= 0:
+            batch_size = data_size
+        batches = (data_size + batch_size - 1) // batch_size
+
+        start_time = time.time() if timeout is not None else None
+
+        def move_batch(batch):
+            if model_device is not None and data_device is not None and data_device != model_device:
+                if isinstance(batch, torch.Tensor):
+                    return batch.to(model_device, non_blocking=True)
+                elif isinstance(batch, (list, tuple)):
+                    return [b.to(model_device, non_blocking=True) for b in batch]
+            return batch
+
+        if disable_tqdm is None:
+            disable_tqdm = int(verbose) < 2
+
+        for NS in range(num_swipes):
+            for node in self.train_nodes:
+                if timeout is not None and (time.time() - start_time) > timeout:
+                    print(f"Timeout reached ({timeout} seconds). Stopping lanczos_swipe.")
+                    return False
+
+                # Precompute batches of HJ and b for this node
+                b_rhs = torch.zeros_like(node.tensor)
+                d_losss = []
+                dd_losss = []
+                for b in range(batches):
+                    x_batch = x[b*batch_size:(b+1)*batch_size] if isinstance(x, torch.Tensor) else [x[i][b*batch_size:(b+1)*batch_size] for i in range(len(x))]
+                    y_batch = y_true[b*batch_size:(b+1)*batch_size]
+                    x_batch = move_batch(x_batch)
+                    y_batch = move_batch(y_batch)
+
+                    y_pred = self.forward(x_batch).permute_first(*self.output_labels).tensor
+                    loss, d_loss, sqd_loss = loss_fn.forward(y_pred, y_batch)
+
+                    b_vec = self.get_b(node, d_loss)
+                    b_rhs.add_(b_vec)
+                    
+                    d_losss.append(d_loss)
+                    dd_losss.append(sqd_loss)
+
+                # Helper: matvec for this node (A @ v)
+                def matvec(v):
+                    Av = 0
+                    for b, d_loss, dd_loss in zip(range(batches), d_losss, dd_losss):
+                        x_batch = x[b*batch_size:(b+1)*batch_size] if isinstance(x, torch.Tensor) else [x[i][b*batch_size:(b+1)*batch_size] for i in range(len(x))]
+                        x_batch = move_batch(x_batch)
+
+
+                        self.set_input(x_batch)
+                        if self.left_stacks is None or self.right_stacks is None:
+                           self.recompute_all_stacks()
+
+                        prep_J = self.get_J(node, d_loss)
+                        J = prep_J['J']
+                        J_einsum = prep_J['einsum']
+                        node_ein = prep_J['node_ein']
+                        d_loss_ein = prep_J['d_loss_ein']
+                        dd_loss_ein = prep_J['dd_loss_ein']
+                        coeff_ein = prep_J['coeff_ein']
+                        coeff = torch.einsum(f"{J_einsum},{node_ein},{dd_loss_ein}->{coeff_ein}", J.tensor, v, dd_loss)
+                        Av += torch.einsum(f"{J_einsum},{d_loss_ein}->{node_ein}", J.tensor, coeff)
+                    return Av
+
+                # Initial guess x0 = zeros
+                x0 = nn.Parameter(torch.randn_like(b_rhs), requires_grad=True)
+                optimizer = torch.optim.SGD([x0], lr=1e-9, weight_decay=1.0, momentum=0.9)#, max_iter=max_iter, tolerance_grad=tol, tolerance_change=tol)
+                def closure():
+                    optimizer.zero_grad()
+                    matvecx0 = matvec(x0)
+                    loss = torch.sum((b_rhs + matvecx0).square())
+                    print(matvecx0)
+                    loss.backward()
+                    return loss
+
+                for _ in (t_bar:=tqdm(range(max_iter))):
+                    loss = closure()
+                    optimizer.step()
+                    t_bar.set_description(f"Loss: {loss.item():.4f}")
+
+                step_tensor = x0.detach().reshape(b_rhs.shape)
+                node.update_node(step_tensor, lr=lr)
+                self.left_update_stacks(node)
+                if block_callback is not None:
+                    block_callback(NS, node)
+        return True
