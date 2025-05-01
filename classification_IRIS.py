@@ -39,15 +39,15 @@ xinp_test = torch.cat([torch.ones(X_test.shape[0], 1, dtype=X_test.dtype, device
 from tensor.layers import TensorTrainLayer
 from tensor.bregman import KLDivBregman, AutogradBregman, XEAutogradBregman
 
-N = 2
-r = 2
+N = 3
+r = 4
 p = X.shape[1]+1
 C = y.shape[1]-1
 
 # Define Bregman function
 layer = TensorTrainLayer(N, r, p, output_shape=C).cuda()
 y_pred = layer(xinp_train)
-w = 0.1*1/y_pred.std().item()
+w = 1/y_pred.std().item()
 bf = XEAutogradBregman(w=w)
 
 #PyTorch Autograd Bregman (very unstable for now)
@@ -55,12 +55,13 @@ bf = XEAutogradBregman(w=w)
 # phi_func = lambda x: torch.sum(torch.where(x == 0, torch.zeros_like(x), x * torch.log(x)), dim=-1, keepdim=True) #0 * log(0) = 0 assumption
 # d_phi_x_func = lambda x: torch.log(x) + 1
 # bf_auto = AutogradBregman(phi_func=phi_func, forward_transform=forward_transform, d_phi_x_func=d_phi_x_func)
-
-def convergence_criterion(y_pred, y_true):
-    y_pred = torch.cat((y_pred, torch.zeros_like(y_pred[..., :1])), dim=-1)
-    accuracy = (y_pred.argmax(dim=-1) == y_true.argmax(dim=-1)).float().mean().item()
-    print("Accuracy:", accuracy)
-    return accuracy > 0.99
+from sklearn.metrics import balanced_accuracy_score
+def convergence_criterion(*args):
+    y_pred_test = layer(xinp_test)
+    y_pred_test = torch.cat((y_pred_test, torch.zeros_like(y_pred_test[:, :1])), dim=1)
+    accuracy_test = balanced_accuracy_score(y_test.argmax(dim=-1).cpu().numpy(), y_pred_test.argmax(dim=-1).cpu().numpy())
+    print('Test Acc:', accuracy_test)
+    return False
 #%%
 # Test bf vs. bf_auto
 # y_pred = layer(xinp_train)

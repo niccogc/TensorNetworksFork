@@ -282,7 +282,6 @@ def main():
         val_pred = model.predict(X_val_np)
         test_pred = model.predict(X_test_np)
         if args.task == 'classification':
-            from sklearn.metrics import balanced_accuracy_score
             val_score = balanced_accuracy_score(y_val_np.argmax(-1), val_pred)
             test_score = balanced_accuracy_score(y_test_np.argmax(-1), test_pred)
             print('Validation Balanced Accuracy:', val_score)
