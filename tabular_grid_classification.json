@@ -1,0 +1,11 @@
+{
+  "datasets": [
+    "abalonec", "bank", "drybean", "gammatelescope", "iris", "winec", "higgs"
+  ],
+  "tt_N": [3, 4, 5, 6, 8, 10, 12],
+  "tt_r": [4, 8, 12],
+  "tt_num_swipes": [3, 10],
+  "tt_eps_min": [1e-3, 1e-2, 1e-1],
+  "tt_eps_max": [1.0, 0.5, 0.1],
+  "model_type": ["tensor"]
+}

@@ -31,58 +31,10 @@ def parse_xgb_args(args):
             xgb_params[key] = getattr(args, arg)
     return xgb_params
 
-def main():
-    parser = argparse.ArgumentParser(description='Tensor Network Training for Tabular Data')
-    parser.add_argument('--data_file', type=str, required=True, help='Path to .pt file with {"X": X, "y": y}')
-    parser.add_argument('--layer_type', type=str, choices=['tt', 'operator'], default='tt', help='Layer type: tt (TensorTrainLayer) or operator (TensorOperatorLayer)')
-    parser.add_argument('--task', type=str, choices=['classification', 'regression'], required=True, help='Task type: classification or regression')
-    parser.add_argument('--device', type=str, default='cuda')
-    parser.add_argument('--data_device', type=str, default='cuda', choices=['cpu', 'cuda'], help='Device to store the dataset (cpu or cuda)')
-    parser.add_argument('--timeout', type=float, default=None, help='Timeout in seconds for training')
-    parser.add_argument('--wandb_project', type=str, default=None, help='WandB project name')
-    parser.add_argument('--wandb_entity', type=str, default=None, help='WandB entity name')
-    parser.add_argument('--disable_tqdm', action='store_true', help='Disable tqdm progress bars regardless of verbosity')
-    parser.add_argument('--visualize_tn', type=str, default=None, help='Path to save tensor network visualization (e.g., .png)')
-    parser.add_argument('--model_type', type=str, choices=['tensor', 'xgboost', 'svm', 'mlp'], default='tensor', help='Model type: tensor (TensorTrain/Operator), xgboost, svm, or mlp')
-
-    # XGBoost hyperparameters
-    parser.add_argument('--xgb_n_estimators', type=int, default=300, help='Number of boosting rounds for XGBoost')
-    parser.add_argument('--xgb_max_bin', type=int, default=100, help='Max bin for XGBoost')
-    parser.add_argument('--xgb_learning_rate', type=float, default=0.3, help='Learning rate for XGBoost')
-    parser.add_argument('--xgb_grow_policy', type=str, default='depthwise', help='Grow policy for XGBoost')
-    parser.add_argument('--xgb_tree_method', type=str, default='hist', help='Tree method for XGBoost')
-    parser.add_argument('--xgb_device', type=str, default='cuda', help='Device for XGBoost')
-    parser.add_argument('--xgb_n_jobs', type=int, default=-1, help='Number of parallel jobs for XGBoost')
-
-    # SVM hyperparameters
-    parser.add_argument('--svm_C', type=float, default=1.0, help='Regularization parameter for SVM')
-    parser.add_argument('--svm_kernel', type=str, default='rbf', help='Kernel type for SVM')
-    parser.add_argument('--svm_gamma', type=str, default='scale', help='Kernel coefficient for SVM')
-
-    # MLP hyperparameters
-    parser.add_argument('--mlp_hidden_layers', type=int, nargs='+', default=[64, 64], help='Hidden layer sizes for MLP')
-    parser.add_argument('--mlp_activation', type=str, default='relu', help='Activation function for MLP')
-    parser.add_argument('--mlp_lr', type=float, default=1e-3, help='Learning rate for MLP')
-    parser.add_argument('--mlp_epochs', type=int, default=50, help='Number of epochs for MLP')
-    parser.add_argument('--mlp_batch_size', type=int, default=128, help='Batch size for MLP')
-    parser.add_argument('--mlp_device', type=str, default='cuda', help='Device for MLP')
-
-    # Tensor Train hyperparameters
-    parser.add_argument('--tt_layer_type', type=str, choices=['tt', 'operator'], default='tt', help='Layer type for tensor train')
-    parser.add_argument('--tt_N', type=int, default=3, help='Number of carriages for tensor train')
-    parser.add_argument('--tt_r', type=int, default=3, help='Bond dimension for tensor train')
-    parser.add_argument('--tt_num_swipes', type=int, default=1, help='Number of swipes for tensor train')
-    parser.add_argument('--tt_lr', type=float, default=1.0, help='Learning rate for tensor train')
-    parser.add_argument('--tt_method', type=str, default='exact', help='Method for tensor train')
-    parser.add_argument('--tt_eps_max', type=float, default=1.0, help='Initial Epsilon for tensor train')
-    parser.add_argument('--tt_eps_min', type=float, default=1e-3, help='Final Epsilon for tensor train')
-    parser.add_argument('--tt_delta', type=float, default=1.0, help='Delta for tensor train')
-    parser.add_argument('--tt_orthonormalize', action='store_true', help='Orthonormalize for tensor train')
-    parser.add_argument('--tt_timeout', type=float, default=None, help='Timeout for tensor train')
-    parser.add_argument('--tt_batch_size', type=int, default=512, help='Batch size for tensor train')
-    parser.add_argument('--tt_disable_tqdm', action='store_true', help='Disable tqdm for tensor train')
-
-    args = parser.parse_args()
+def train_model(args, data=None):
+    if data is None:
+        data = load_tabular_data(args.data_file, args.data_device)
+    X_train, y_train, X_val, y_val, X_test, y_test = data
 
     # Get dataset name
     dataset_name = os.path.splitext(os.path.basename(args.data_file))[0]
@@ -135,13 +87,6 @@ def main():
         
         wandb.init(project=args.wandb_project, config=config, entity=args.wandb_entity)
         wandb_enabled = True
-
-    # Set CUDA device
-    device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
-    data_device = torch.device(args.data_device if torch.cuda.is_available() or args.data_device == 'cpu' else 'cpu')
-
-    # Load data
-    X_train, y_train, X_val, y_val, X_test, y_test = load_tabular_data(args.data_file, data_device)
 
     # Save model type and hyperparameters to config
     if args.wandb_project:
@@ -198,6 +143,59 @@ def main():
         print('Test MSE:', test_score)
         if wandb_enabled:
             wandb.log({'val/mse': val_score, 'test/mse_f': test_score})
+    if wandb_enabled:
+        wandb.finish()
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser(description='Tensor Network Training for Tabular Data')
+    parser.add_argument('--data_file', type=str, required=True, help='Path to .pt file with {"X": X, "y": y}')
+    parser.add_argument('--layer_type', type=str, choices=['tt', 'operator'], default='tt', help='Layer type: tt (TensorTrainLayer) or operator (TensorOperatorLayer)')
+    parser.add_argument('--task', type=str, choices=['classification', 'regression'], required=True, help='Task type: classification or regression')
+    parser.add_argument('--device', type=str, default='cuda')
+    parser.add_argument('--data_device', type=str, default='cuda', choices=['cpu', 'cuda'], help='Device to store the dataset (cpu or cuda)')
+    parser.add_argument('--timeout', type=float, default=None, help='Timeout in seconds for training')
+    parser.add_argument('--wandb_project', type=str, default=None, help='WandB project name')
+    parser.add_argument('--wandb_entity', type=str, default=None, help='WandB entity name')
+    parser.add_argument('--disable_tqdm', action='store_true', help='Disable tqdm progress bars regardless of verbosity')
+    parser.add_argument('--visualize_tn', type=str, default=None, help='Path to save tensor network visualization (e.g., .png)')
+    parser.add_argument('--model_type', type=str, choices=['tensor', 'xgboost', 'svm', 'mlp'], default='tensor', help='Model type: tensor (TensorTrain/Operator), xgboost, svm, or mlp')
+
+    # XGBoost hyperparameters
+    parser.add_argument('--xgb_n_estimators', type=int, default=300, help='Number of boosting rounds for XGBoost')
+    parser.add_argument('--xgb_max_bin', type=int, default=100, help='Max bin for XGBoost')
+    parser.add_argument('--xgb_learning_rate', type=float, default=0.3, help='Learning rate for XGBoost')
+    parser.add_argument('--xgb_grow_policy', type=str, default='depthwise', help='Grow policy for XGBoost')
+    parser.add_argument('--xgb_tree_method', type=str, default='hist', help='Tree method for XGBoost')
+    parser.add_argument('--xgb_device', type=str, default='cuda', help='Device for XGBoost')
+    parser.add_argument('--xgb_n_jobs', type=int, default=-1, help='Number of parallel jobs for XGBoost')
+
+    # SVM hyperparameters
+    parser.add_argument('--svm_C', type=float, default=1.0, help='Regularization parameter for SVM')
+    parser.add_argument('--svm_kernel', type=str, default='rbf', help='Kernel type for SVM')
+    parser.add_argument('--svm_gamma', type=str, default='scale', help='Kernel coefficient for SVM')
+
+    # MLP hyperparameters
+    parser.add_argument('--mlp_hidden_layers', type=int, nargs='+', default=[64, 64], help='Hidden layer sizes for MLP')
+    parser.add_argument('--mlp_activation', type=str, default='relu', help='Activation function for MLP')
+    parser.add_argument('--mlp_lr', type=float, default=1e-3, help='Learning rate for MLP')
+    parser.add_argument('--mlp_epochs', type=int, default=50, help='Number of epochs for MLP')
+    parser.add_argument('--mlp_batch_size', type=int, default=128, help='Batch size for MLP')
+    parser.add_argument('--mlp_device', type=str, default='cuda', help='Device for MLP')
+
+    # Tensor Train hyperparameters
+    parser.add_argument('--tt_layer_type', type=str, choices=['tt', 'operator'], default='tt', help='Layer type for tensor train')
+    parser.add_argument('--tt_N', type=int, default=3, help='Number of carriages for tensor train')
+    parser.add_argument('--tt_r', type=int, default=3, help='Bond dimension for tensor train')
+    parser.add_argument('--tt_num_swipes', type=int, default=1, help='Number of swipes for tensor train')
+    parser.add_argument('--tt_lr', type=float, default=1.0, help='Learning rate for tensor train')
+    parser.add_argument('--tt_method', type=str, default='exact', help='Method for tensor train')
+    parser.add_argument('--tt_eps_max', type=float, default=1.0, help='Initial Epsilon for tensor train')
+    parser.add_argument('--tt_eps_min', type=float, default=1e-3, help='Final Epsilon for tensor train')
+    parser.add_argument('--tt_delta', type=float, default=1.0, help='Delta for tensor train')
+    parser.add_argument('--tt_orthonormalize', action='store_true', help='Orthonormalize for tensor train')
+    parser.add_argument('--tt_timeout', type=float, default=None, help='Timeout for tensor train')
+    parser.add_argument('--tt_batch_size', type=int, default=512, help='Batch size for tensor train')
+    parser.add_argument('--tt_disable_tqdm', action='store_true', help='Disable tqdm for tensor train')
+
+    args = parser.parse_args()
+    train_model(args)  # loads data inside main by default
