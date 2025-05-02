@@ -59,7 +59,7 @@ if __name__ == "__main__":
     num_swipes = 10
 
     N = 3
-    r = 200
+    r = 50
     CB = -1
     batch_size = 128
     max_iter = 500

@@ -3,6 +3,8 @@ import torch.nn as nn
 import torch.optim as optim
 from tqdm import tqdm
 import numpy as np
+from sklearn.metrics import balanced_accuracy_score, mean_squared_error
+
 
 class MLP(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_layers=[64, 64], activation='relu'):
@@ -71,7 +73,6 @@ class MLPWrapper:
             else:
                 return out.cpu().numpy().squeeze()
     def score(self, X, y):
-        from sklearn.metrics import balanced_accuracy_score, mean_squared_error
         # Convert one-hot to class labels if needed
         if self.task == 'classification' and y.ndim == 2:
             y = y.argmax(-1)
@@ -79,4 +80,4 @@ class MLPWrapper:
         if self.task == 'classification':
             return balanced_accuracy_score(y, y_pred)
         else:
-            return -mean_squared_error(y, y_pred)
+            return mean_squared_error(y, y_pred)

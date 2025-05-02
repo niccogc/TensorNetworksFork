@@ -449,3 +449,70 @@ class TensorConvolutionGridTrainLayer(TensorNetworkLayer):
         # Create a TensorNetwork
         tensor_network = TensorNetwork(x_nodes, main_nodes, self.nodes, output_labels=self.labels)
         super(TensorConvolutionGridTrainLayer, self).__init__(tensor_network)
+
+from tensor.node import CPDTensorNode
+
+class CPD(TensorNetworkLayer):
+    def __init__(self, num_carriages, bond_dim, input_features, output_shape=tuple(), ring=False, squeeze=True):
+        """Initializes a TensorTrainLayer."""
+        self.num_carriages = num_carriages
+        self.bond_dim = bond_dim
+        self.input_features = input_features
+        self.output_shape = output_shape if isinstance(output_shape, tuple) else (output_shape,)
+        self.ring = ring
+
+        # Create input nodes
+        self.x_nodes = []
+        for i in range(1, num_carriages+1):
+            x_node = TensorNode((1, input_features), ['s', 'p'], name=f"X{i}")
+            self.x_nodes.append(x_node)
+
+        # Create main nodes
+        self.nodes = []
+        self.labels = ['s']
+        for i in range(1, num_carriages+1):
+            if i-1 < len(self.output_shape):
+                up = self.output_shape[i-1]
+                up_label = f'c{i}'
+                self.labels.append(up_label)
+            else:
+                up = 1
+                up_label = 'c'
+            down = input_features
+            left_label = 'rr' if ring and i == 1 else f'r{i}'
+            right_label = 'rr' if ring and i == num_carriages else f'r{i+1}'
+            if ring:
+                left = bond_dim
+                right = bond_dim
+            else:
+                if i == 1:
+                    left = 1
+                    right = bond_dim
+                elif i == num_carriages:
+                    left = bond_dim
+                    right = 1
+                else:
+                    left = bond_dim
+                    right = bond_dim
+            if left == 1 or right == 1:
+                block_tensor = (left, up, down, right)
+            else:
+                block_tensor = torch.zeros((left, up, down, right))
+                for u in range(up):
+                    for k in range(down):
+                        block_tensor[:, u, k, :] = torch.diag(torch.randn(right))
+            node = CPDTensorNode(block_tensor, [left_label, up_label, 'p', right_label], l=left_label, r=right_label, name=f"A{i}")
+            if i > 1:
+                self.nodes[-1].connect(node, left_label, priority=1)
+            if ring and i == num_carriages:
+                node.connect(self.nodes[0], right_label, priority=0)
+            node.connect(self.x_nodes[i-1], 'p', priority=2)
+            self.nodes.append(node)
+        
+        # Squeeze singleton dimensions
+        if squeeze:
+            for node in self.nodes:
+                node.squeeze(self.labels)
+        # Create a TensorNetwork
+        tensor_network = TensorNetwork(self.x_nodes, self.nodes, output_labels=self.labels)
+        super(CPD, self).__init__(tensor_network)

@@ -250,3 +250,19 @@ class TensorNode:
     def __repr__(self):
         """String representation of the TensorNode."""
         return f"TensorNode(name={self.name}, shape={self.shape}, labels={self.dim_labels})"
+    
+class CPDTensorNode(TensorNode):
+    def update_node(self, step, lr=1):
+        """Updates the tensor of the node with the given step size."""
+        if not self.left_labels or not self.right_labels:
+            self.tensor = self.tensor + lr * step
+        else:
+            left = self.dim_size(self.left_labels[0])
+            mask = torch.eye(left, device=self.tensor.device, dtype=self.tensor.dtype)
+            for l in self.dim_labels:
+                if self.is_horizontal_bond(l):
+                    continue
+                mask = mask.unsqueeze(self.dim_labels.index(l))
+            mask = mask.expand_as(step)
+            self.tensor = self.tensor + lr * (step * mask)
+        return self
