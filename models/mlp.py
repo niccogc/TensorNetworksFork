@@ -46,6 +46,7 @@ class MLPWrapper:
         dataset = torch.utils.data.TensorDataset(X, y)
         loader = torch.utils.data.DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
         self.model.train()
+        loss_mean = np.inf
         for _ in (t_bar:=tqdm(range(self.epochs))):
             losses = []
             for xb, yb in loader:
@@ -54,8 +55,10 @@ class MLPWrapper:
                 loss = self.criterion(out, yb)
                 loss.backward()
                 self.optimizer.step()
-                losses.append(loss.item())
-            t_bar.set_postfix(loss=np.mean(losses))
+                loss_batch = loss.item()
+                losses.append(loss_batch)
+                t_bar.set_postfix(loss=loss_mean, loss_batch=loss_batch)
+            loss_mean = np.mean(losses)
     def predict(self, X):
         self.model.eval()
         X = X.to(dtype=torch.float32, device=self.device)

@@ -467,12 +467,13 @@ class TensorNetwork:
 
                     total_loss += loss.mean().item()
 
-                if verbose:
+                if verbose > 1:
                     print(f"NS: {NS}, Left loss ({node_l2r.name if hasattr(node_l2r, 'name') else 'node'}):", total_loss / batches, f" (eps: {eps_})")
                 try:
                     step_tensor = self.solve_system(node_l2r, A_out, b_out, J_out, method=method, eps=eps_, delta=delta)
                 except torch.linalg.LinAlgError:
-                    print(f"Singular system for node {node_l2r.name if hasattr(node_l2r, 'name') else 'node'}")
+                    if verbose > 0:
+                        print(f"Singular system for node {node_l2r.name if hasattr(node_l2r, 'name') else 'node'}")
                     return False
                 
                 node_l2r.update_node(step_tensor, lr=lr)
@@ -502,7 +503,8 @@ class TensorNetwork:
                         start_time += time.time() - pause_time
 
                     if convergence_criterion(y_preds, y_trues):
-                        print('Converged (left pass)')
+                        if verbose > 0:
+                            print('Converged (left pass)')
                         if block_callback is not None:
                             block_callback(NS, node_l2r)
                         return True
@@ -553,12 +555,13 @@ class TensorNetwork:
 
                     total_loss += loss.mean().item()
 
-                if verbose:
+                if verbose > 1:
                     print(f"NS: {NS}, Right loss ({node_r2l.name if hasattr(node_r2l, 'name') else 'node'}):", total_loss / batches, f" (eps: {eps_})")
                 try:
                     step_tensor = self.solve_system(node_r2l, A_out, b_out, J_out, method=method, eps=eps_, delta=delta)
                 except torch.linalg.LinAlgError:
-                    print(f"Singular system for node {node_r2l.name if hasattr(node_r2l, 'name') else 'node'}")
+                    if verbose > 0:
+                        print(f"Singular system for node {node_r2l.name if hasattr(node_r2l, 'name') else 'node'}")
                     return False
                 
                 node_r2l.update_node(step_tensor, lr=lr)
@@ -588,7 +591,8 @@ class TensorNetwork:
                         start_time += time.time() - pause_time
 
                     if convergence_criterion(y_preds, y_trues):
-                        print('Converged (right pass)')
+                        if verbose > 0:
+                            print('Converged (right pass)')
                         if block_callback is not None:
                             block_callback(NS, node_r2l)
                         return True

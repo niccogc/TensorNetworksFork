@@ -71,14 +71,20 @@ def train_model(args, data=None):
         'num_swipes': args.tt_num_swipes,
         'lr': args.tt_lr,
         'method': args.tt_method,
+        'verbose': args.tt_verbose,
         'eps_min': args.tt_eps_min,
         'eps_max': args.tt_eps_max,
         'delta': args.tt_delta,
         'orthonormalize': args.tt_orthonormalize,
         'timeout': args.tt_timeout,
         'batch_size': args.tt_batch_size,
-        'disable_tqdm': args.tt_disable_tqdm,
+        'disable_tqdm': args.tt_disable_tqdm or args.disable_tqdm,
     }
+
+    # If choosing SVM and the sample size is larger than 1000000, skip
+    if args.model_type == 'svm' and X_train.shape[0] > 1000000:
+        print(f"Skipping SVM training for {dataset_name} due to large sample size.")
+        return
 
     # WandB setup
     wandb_enabled = False
@@ -170,8 +176,8 @@ if __name__ == '__main__':
     parser.add_argument('--mlp_hidden_layers', type=int, nargs='+', default=[64, 64], help='Hidden layer sizes for MLP')
     parser.add_argument('--mlp_activation', type=str, default='relu', help='Activation function for MLP')
     parser.add_argument('--mlp_lr', type=float, default=1e-3, help='Learning rate for MLP')
-    parser.add_argument('--mlp_epochs', type=int, default=50, help='Number of epochs for MLP')
-    parser.add_argument('--mlp_batch_size', type=int, default=128, help='Batch size for MLP')
+    parser.add_argument('--mlp_epochs', type=int, default=25, help='Number of epochs for MLP')
+    parser.add_argument('--mlp_batch_size', type=int, default=512, help='Batch size for MLP')
     parser.add_argument('--mlp_device', type=str, default='cuda', help='Device for MLP')
 
     # Tensor Train hyperparameters
