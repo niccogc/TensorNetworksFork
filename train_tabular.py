@@ -63,6 +63,7 @@ def train_model(args, data=None):
         'epochs': args.mlp_epochs,
         'batch_size': args.mlp_batch_size,
         'device': args.mlp_device,
+        'type': args.mlp_type,
     }
     tt_params = {
         'layer_type': args.tt_layer_type,
@@ -117,10 +118,16 @@ def train_model(args, data=None):
         model = SVMRegWrapper(svm_params) if args.task == 'regression' else SVMClfWrapper(svm_params)
     elif args.model_type == 'mlp':
         model = MLPWrapper(input_dim, output_dim, mlp_params, task=args.task)
+        # Add num parameters to config
+        if wandb_enabled:
+            wandb.config.update({'num_parameters': sum([p.numel() for p in model.model.parameters()])})
     elif args.model_type == 'tensor':
         torch.set_default_dtype(torch.float64)
         # Use torch tensors for tensor train
         model = TensorTrainWrapper(input_dim, output_dim, tt_params, task=args.task, device=args.device)
+        # Add num parameters to config
+        if wandb_enabled:
+            wandb.config.update({'num_parameters': model.model.num_parameters()})
         converged = model.fit(X_train, y_train)
         if wandb_enabled:
             wandb.log({'singular': not converged})
@@ -147,7 +154,6 @@ def train_model(args, data=None):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Tensor Network Training for Tabular Data')
     parser.add_argument('--data_file', type=str, required=True, help='Path to .pt file with {"X": X, "y": y}')
-    parser.add_argument('--layer_type', type=str, choices=['tt', 'operator'], default='tt', help='Layer type: tt (TensorTrainLayer) or operator (TensorOperatorLayer)')
     parser.add_argument('--task', type=str, choices=['classification', 'regression'], required=True, help='Task type: classification or regression')
     parser.add_argument('--device', type=str, default='cuda')
     parser.add_argument('--data_device', type=str, default='cuda', choices=['cpu', 'cuda'], help='Device to store the dataset (cpu or cuda)')
@@ -155,7 +161,6 @@ if __name__ == '__main__':
     parser.add_argument('--wandb_project', type=str, default=None, help='WandB project name')
     parser.add_argument('--wandb_entity', type=str, default=None, help='WandB entity name')
     parser.add_argument('--disable_tqdm', action='store_true', help='Disable tqdm progress bars regardless of verbosity')
-    parser.add_argument('--visualize_tn', type=str, default=None, help='Path to save tensor network visualization (e.g., .png)')
     parser.add_argument('--model_type', type=str, choices=['tensor', 'xgboost', 'svm', 'mlp'], default='tensor', help='Model type: tensor (TensorTrain/Operator), xgboost, svm, or mlp')
 
     # XGBoost hyperparameters
@@ -179,9 +184,10 @@ if __name__ == '__main__':
     parser.add_argument('--mlp_epochs', type=int, default=25, help='Number of epochs for MLP')
     parser.add_argument('--mlp_batch_size', type=int, default=512, help='Batch size for MLP')
     parser.add_argument('--mlp_device', type=str, default='cuda', help='Device for MLP')
+    parser.add_argument('--mlp_type', type=str, default='standard', choices=['standard', 'residual', 'pinet'], help='MLP type: standard, residual, or pinet')
 
     # Tensor Train hyperparameters
-    parser.add_argument('--tt_layer_type', type=str, choices=['tt', 'operator'], default='tt', help='Layer type for tensor train')
+    parser.add_argument('--tt_layer_type', type=str, choices=['tt', 'operator', 'conv'], default='tt', help='Layer type for tensor train')
     parser.add_argument('--tt_N', type=int, default=3, help='Number of carriages for tensor train')
     parser.add_argument('--tt_r', type=int, default=3, help='Bond dimension for tensor train')
     parser.add_argument('--tt_num_swipes', type=int, default=1, help='Number of swipes for tensor train')
@@ -190,6 +196,8 @@ if __name__ == '__main__':
     parser.add_argument('--tt_eps_max', type=float, default=1.0, help='Initial Epsilon for tensor train')
     parser.add_argument('--tt_eps_min', type=float, default=1e-3, help='Final Epsilon for tensor train')
     parser.add_argument('--tt_delta', type=float, default=1.0, help='Delta for tensor train')
+    parser.add_argument('--tt_num_kernels', type=int, default=1, help='Number of kernels for tensor train')
+    parser.add_argument('--tt_CB', type=int, default=4, help='Convolution bond for tensor train')
     parser.add_argument('--tt_orthonormalize', action='store_true', help='Orthonormalize for tensor train')
     parser.add_argument('--tt_timeout', type=float, default=None, help='Timeout for tensor train')
     parser.add_argument('--tt_batch_size', type=int, default=512, help='Batch size for tensor train')

@@ -1,5 +1,5 @@
 import torch
-from tensor.layers import TensorTrainLayer, TensorOperatorLayer
+from tensor.layers import TensorTrainLayer, TensorOperatorLayer, TensorConvolutionTrainLayer
 from tensor.bregman import XEAutogradBregman, SquareBregFunction
 import numpy as np
 
@@ -19,6 +19,8 @@ class TensorTrainWrapper:
         self.eps_max = tt_params.get('eps_max', 1.0)
         self.eps = np.geomspace(self.eps_max, self.eps_min, num=2*self.num_swipes).tolist()
         self.delta = tt_params.get('delta', 1.0)
+        self.num_kernels = tt_params.get('num_kernels', 1)
+        self.CB = tt_params.get('CB', -1)
         self.orthonormalize = tt_params.get('orthonormalize', False)
         self.timeout = tt_params.get('timeout', None)
         self.batch_size = tt_params.get('batch_size', 512)
@@ -33,7 +35,7 @@ class TensorTrainWrapper:
                 input_features=self.input_dim,
                 output_shape=self.output_shape
             ).to(self.device)
-        else:
+        elif self.layer_type == 'operator':
             # Operator layer (optional, not default)
             ops = []
             p = self.input_dim
@@ -52,9 +54,16 @@ class TensorTrainWrapper:
                 num_carriages=self.N,
                 output_shape=self.output_shape
             ).to(self.device)
+        elif self.layer_type == 'conv':
+            self.model = TensorConvolutionTrainLayer(num_carriages=self.N, bond_dim=self.r, num_patches=1, patch_pixels=self.num_kernels*input_dim, output_shape=self.output_shape, convolution_bond=self.CB).cuda()
+        else:
+            raise ValueError(f"Unknown layer type: {self.layer_type}")
+
     def fit(self, X, y):
         X = X.to(self.device)
         y = y.to(self.device)
+        if self.layer_type == 'conv':
+            X = X.unsqueeze(-2).expand(-1, self.num_kernels, -1).reshape(-1, 1, self.num_kernels * self.input_dim)
         # Bregman function
         if self.task == 'classification':
             with torch.inference_mode():
@@ -86,6 +95,8 @@ class TensorTrainWrapper:
             print('Training failed:', e)
     def predict(self, X):
         X = X.to(self.device)
+        if self.layer_type == 'conv':
+            X = X.unsqueeze(-2).expand(-1, self.num_kernels, -1).reshape(-1, 1, self.num_kernels * self.input_dim)
         self.model.eval()
         with torch.no_grad():
             y_pred = self.model(X.to(self.device))
