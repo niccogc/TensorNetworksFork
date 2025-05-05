@@ -55,17 +55,17 @@ class TensorTrainWrapper:
             ).to(self.device)
     def fit(self, X, y, X_val=None, y_val=None):
         # Bregman function
-        with torch.inference_mode():
-            y_pred = self.model(X[:64].to(self.device))
-            w = 1/y_pred.std().item() if y_pred.std().item() > 0 else 1.0
         if self.task == 'classification':
+            with torch.inference_mode():
+                y_pred = self.model(X[:64].to(self.device))
+                w = 1/y_pred.std().item() if y_pred.std().item() > 0 else 1.0
             bf = XEAutogradBregman(w=w)
         else:
             bf = SquareBregFunction()
         def convergence_criterion(_, __):
             return False  # No early stopping for now
         try:
-            self.model.tensor_network.accumulating_swipe(
+            return self.model.tensor_network.accumulating_swipe(
                 X, y, bf,
                 batch_size=self.batch_size,
                 num_swipes=self.num_swipes,
@@ -94,11 +94,3 @@ class TensorTrainWrapper:
                 return y_pred.argmax(dim=-1).cpu().numpy()
             else:
                 return y_pred.cpu().numpy().squeeze()
-    def score(self, X, y):
-        y_pred = self.predict(X)
-        if self.task == 'classification':
-            if y.ndim == 2:
-                y = y.argmax(-1)
-            return balanced_accuracy_score(y.cpu().numpy(), y_pred)
-        else:
-            return mean_squared_error(y.cpu().numpy(), y_pred)

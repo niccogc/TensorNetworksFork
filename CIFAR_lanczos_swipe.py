@@ -56,13 +56,13 @@ if __name__ == "__main__":
     y_test = F.one_hot(y_test, num_classes=10).to(dtype=torch.float64)
 
 
-    num_swipes = 10
+    num_swipes = 3
 
     N = 3
     r = 50
     CB = -1
-    batch_size = 128
-    max_iter = 500
+    batch_size = 256
+    max_iter = 2000
 
     # Define Bregman function
     layer = TensorConvolutionTrainLayer(num_carriages=N, bond_dim=r, num_patches=xinp_train.shape[1], patch_pixels=xinp_train.shape[2], output_shape=y_train.shape[1]-1, convolution_bond=CB).cuda()

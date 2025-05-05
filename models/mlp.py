@@ -72,12 +72,3 @@ class MLPWrapper:
                 return out.argmax(dim=1).cpu().numpy()
             else:
                 return out.cpu().numpy().squeeze()
-    def score(self, X, y):
-        # Convert one-hot to class labels if needed
-        if self.task == 'classification' and y.ndim == 2:
-            y = y.argmax(-1)
-        y_pred = self.predict(X)
-        if self.task == 'classification':
-            return balanced_accuracy_score(y, y_pred)
-        else:
-            return mean_squared_error(y, y_pred)

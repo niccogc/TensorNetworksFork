@@ -5,6 +5,8 @@ from models.xgboost import XGBRegWrapper, XGBClfWrapper
 from models.svm import SVMRegWrapper, SVMClfWrapper
 from models.mlp import MLPWrapper
 from models.tensor_train import TensorTrainWrapper
+from sklearn.metrics import accuracy_score, mean_squared_error
+import numpy as np
 
 # ---- Tabular data loader ----
 def load_tabular_data(filename, device):
@@ -31,7 +33,21 @@ def parse_xgb_args(args):
             xgb_params[key] = getattr(args, arg)
     return xgb_params
 
+def evaluate_model(model, X, y, task, device=None):
+    y_pred = model.predict(X)
+    if task == 'classification':
+        if y.ndim == 2:
+            y_true = y.argmax(-1)
+        else:
+            y_true = y
+        acc = accuracy_score(y_true, y_pred)
+        return acc
+    else:
+        rmse = np.sqrt(mean_squared_error(y, y_pred))
+        return rmse
+
 def train_model(args, data=None):
+    args.version = '05-05-25'
     if data is None:
         data = load_tabular_data(args.data_file, args.data_device)
     X_train, y_train, X_val, y_val, X_test, y_test = data
@@ -121,28 +137,30 @@ def train_model(args, data=None):
         model = TensorTrainWrapper(input_dim, output_dim, tt_params, task=args.task, device=args.device)
         X_train_tt = X_train.to(args.device)
         y_train_tt = y_train.to(args.device)
-        model.fit(X_train_tt, y_train_tt)
+        converged = model.fit(X_train_tt, y_train_tt)
+        if wandb_enabled:
+            wandb.log({'singular': not converged})
     else:
         raise ValueError(f"Unknown model_type: {args.model_type}")
     if args.model_type != 'tensor':
         model.fit(X_train_np, y_train_np)
     # Unified evaluation
     if args.model_type == 'tensor':
-        val_score = model.score(X_val.to(args.device), y_val.to(args.device))
-        test_score = model.score(X_test.to(args.device), y_test.to(args.device))
+        val_score = evaluate_model(model, X_val.to(args.device), y_val.to(args.device), args.task, device=args.device)
+        test_score = evaluate_model(model, X_test.to(args.device), y_test.to(args.device), args.task, device=args.device)
     else:
-        val_score = model.score(X_val_np, y_val_np)
-        test_score = model.score(X_test_np, y_test_np)
+        val_score = evaluate_model(model, X_val_np, y_val_np, args.task)
+        test_score = evaluate_model(model, X_test_np, y_test_np, args.task)
     if args.task == 'classification':
-        print('Validation Balanced Accuracy:', val_score)
-        print('Test Balanced Accuracy:', test_score)
+        print('Validation Accuracy:', val_score)
+        print('Test Accuracy:', test_score)
         if wandb_enabled:
-            wandb.log({'val/b_acc': val_score, 'test/b_acc_f': test_score})
+            wandb.log({'val/accuracy': val_score, 'test/accuracy': test_score})
     else:
-        print('Validation MSE:', val_score)
-        print('Test MSE:', test_score)
+        print('Validation RMSE:', val_score)
+        print('Test RMSE:', test_score)
         if wandb_enabled:
-            wandb.log({'val/mse': val_score, 'test/mse_f': test_score})
+            wandb.log({'val/rmse': val_score, 'test/rmse': test_score})
     if wandb_enabled:
         wandb.finish()
 

@@ -799,8 +799,8 @@ class TensorNetwork:
                         beta_j1 = torch.norm(w)
                         b_coeffs.append(beta_j1)
                         v.append(w / beta_j1)
-                        #if beta_j1 < tol:
-                        #    break
+                        if beta_j1 < tol:
+                           break
                     Vm = torch.stack(v[1:j+1], dim=-1)  # (n, m)
                     Tm = torch.diag(torch.tensor(a[1:], device=x0.device, dtype=x0.dtype))
                     if len(a) > 2:

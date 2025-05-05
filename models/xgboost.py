@@ -11,8 +11,6 @@ class XGBRegWrapper:
         self.xgb_object.fit(X, y)
     def predict(self, X):
         return self.xgb_object.predict(X)
-    def score(self, X, y):
-        return self.xgb_object.score(X, y)
 
 class XGBClfWrapper:
     def __init__(self, xgb_params=None):
@@ -35,9 +33,3 @@ class XGBClfWrapper:
     def predict(self, X):
         y_pred = self.xgb_object.predict(X)
         return np.vectorize(self.retranslation_dict.get)(y_pred)
-    def score(self, X, y):
-        # Convert one-hot to class labels if needed
-        if y.ndim == 2:
-            y = y.argmax(-1)
-        y_enc = np.vectorize(self.translation_dict.get)(y)
-        return self.xgb_object.score(X, y_enc)

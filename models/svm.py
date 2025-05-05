@@ -10,8 +10,6 @@ class SVMRegWrapper:
         self.svm_object.fit(X, y)
     def predict(self, X):
         return self.svm_object.predict(X)
-    def score(self, X, y):
-        return self.svm_object.score(X, y)
 
 class SVMClfWrapper:
     def __init__(self, svm_params=None):
@@ -21,7 +19,6 @@ class SVMClfWrapper:
         self.translation_dict = None
         self.retranslation_dict = None
     def fit(self, X, y):
-        # Convert one-hot to class labels if needed
         if y.ndim == 2:
             y = y.argmax(-1)
         self.translation_dict = {l: i for i, l in enumerate(np.unique(y))}
@@ -31,9 +28,3 @@ class SVMClfWrapper:
     def predict(self, X):
         y_pred = self.svm_object.predict(X)
         return np.vectorize(self.retranslation_dict.get)(y_pred)
-    def score(self, X, y):
-        # Convert one-hot to class labels if needed
-        if y.ndim == 2:
-            y = y.argmax(-1)
-        y_enc = np.vectorize(self.translation_dict.get)(y)
-        return self.svm_object.score(X, y_enc)
