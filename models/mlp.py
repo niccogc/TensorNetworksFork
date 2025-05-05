@@ -3,7 +3,6 @@ import torch.nn as nn
 import torch.optim as optim
 from tqdm import tqdm
 import numpy as np
-from sklearn.metrics import balanced_accuracy_score, mean_squared_error
 
 
 class MLP(nn.Module):
@@ -39,14 +38,11 @@ class MLPWrapper:
         else:
             self.criterion = nn.MSELoss()
     def fit(self, X, y):
+        X = X.to(self.device, dtype=torch.float32)
+        y = y.to(self.device, dtype=torch.long if self.task == 'classification' else torch.float32)
         # Convert one-hot to class labels if needed
         if self.task == 'classification' and y.ndim == 2:
             y = y.argmax(-1)
-        X = torch.tensor(X, dtype=torch.float32, device=self.device)
-        if self.task == 'classification':
-            y = torch.tensor(y, dtype=torch.long, device=self.device)
-        else:
-            y = torch.tensor(y, dtype=torch.float32, device=self.device)
         dataset = torch.utils.data.TensorDataset(X, y)
         loader = torch.utils.data.DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
         self.model.train()
@@ -55,20 +51,17 @@ class MLPWrapper:
             for xb, yb in loader:
                 self.optimizer.zero_grad()
                 out = self.model(xb)
-                if self.task == 'classification':
-                    loss = self.criterion(out, yb)
-                else:
-                    loss = self.criterion(out.squeeze(), yb)
+                loss = self.criterion(out, yb)
                 loss.backward()
                 self.optimizer.step()
                 losses.append(loss.item())
             t_bar.set_postfix(loss=np.mean(losses))
     def predict(self, X):
         self.model.eval()
-        X = torch.tensor(X, dtype=torch.float32, device=self.device)
+        X = X.to(dtype=torch.float32, device=self.device)
         with torch.no_grad():
             out = self.model(X)
             if self.task == 'classification':
                 return out.argmax(dim=1).cpu().numpy()
             else:
-                return out.cpu().numpy().squeeze()
+                return out.squeeze(-1).cpu().numpy()

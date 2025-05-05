@@ -19,35 +19,21 @@ def load_tabular_data(filename, device):
     y_test = data['y_test'].to(device)
     return X_train, y_train, X_val, y_val, X_test, y_test
 
-def fit_model_fn(model_type, task, X_train, y_train):
-    if model_type == 'tensor':
-        return None  # Tensor model is handled in main for now
-    else:
-        raise ValueError(f"Unknown model_type: {model_type}")
-
-def parse_xgb_args(args):
-    xgb_params = {}
-    for arg in vars(args):
-        if arg.startswith('xgb.'):
-            key = arg.split('xgb.')[1]
-            xgb_params[key] = getattr(args, arg)
-    return xgb_params
-
-def evaluate_model(model, X, y, task, device=None):
+def evaluate_model(model, X, y_true, task):
     y_pred = model.predict(X)
     if task == 'classification':
-        if y.ndim == 2:
-            y_true = y.argmax(-1)
-        else:
-            y_true = y
-        acc = accuracy_score(y_true, y_pred)
+        if y_true.ndim == 2:
+            y_true = y_true.argmax(-1)
+        acc = accuracy_score(y_true.cpu().numpy(), y_pred)
         return acc
     else:
-        rmse = np.sqrt(mean_squared_error(y, y_pred))
+        if y_true.ndim == 2:
+            y_true = y_true.squeeze(-1)
+        rmse = np.sqrt(mean_squared_error(y_true.cpu().numpy(), y_pred))
         return rmse
 
 def train_model(args, data=None):
-    args.version = '05-05-25'
+    args.version = '05-05-25v2'
     if data is None:
         data = load_tabular_data(args.data_file, args.data_device)
     X_train, y_train, X_val, y_val, X_test, y_test = data
@@ -117,14 +103,8 @@ def train_model(args, data=None):
         wandb.config.update(config_dict)
 
     # Model setup and training (unified for all models)
-    X_train_np = X_train.cpu().numpy()
-    y_train_np = y_train.cpu().numpy()
-    X_val_np = X_val.cpu().numpy()
-    y_val_np = y_val.cpu().numpy()
-    X_test_np = X_test.cpu().numpy()
-    y_test_np = y_test.cpu().numpy()
-    input_dim = X_train_np.shape[1]
-    output_dim = y_train_np.shape[1]
+    input_dim = X_train.shape[1]
+    output_dim = y_train.shape[1]
     if args.model_type == 'xgboost':
         model = XGBRegWrapper(xgb_params) if args.task == 'regression' else XGBClfWrapper(xgb_params)
     elif args.model_type == 'svm':
@@ -135,22 +115,16 @@ def train_model(args, data=None):
         torch.set_default_dtype(torch.float64)
         # Use torch tensors for tensor train
         model = TensorTrainWrapper(input_dim, output_dim, tt_params, task=args.task, device=args.device)
-        X_train_tt = X_train.to(args.device)
-        y_train_tt = y_train.to(args.device)
-        converged = model.fit(X_train_tt, y_train_tt)
+        converged = model.fit(X_train, y_train)
         if wandb_enabled:
             wandb.log({'singular': not converged})
     else:
         raise ValueError(f"Unknown model_type: {args.model_type}")
     if args.model_type != 'tensor':
-        model.fit(X_train_np, y_train_np)
+        model.fit(X_train, y_train)
     # Unified evaluation
-    if args.model_type == 'tensor':
-        val_score = evaluate_model(model, X_val.to(args.device), y_val.to(args.device), args.task, device=args.device)
-        test_score = evaluate_model(model, X_test.to(args.device), y_test.to(args.device), args.task, device=args.device)
-    else:
-        val_score = evaluate_model(model, X_val_np, y_val_np, args.task)
-        test_score = evaluate_model(model, X_test_np, y_test_np, args.task)
+    val_score = evaluate_model(model, X_val, y_val, args.task)
+    test_score = evaluate_model(model, X_test, y_test, args.task)
     if args.task == 'classification':
         print('Validation Accuracy:', val_score)
         print('Test Accuracy:', test_score)
@@ -213,6 +187,7 @@ if __name__ == '__main__':
     parser.add_argument('--tt_orthonormalize', action='store_true', help='Orthonormalize for tensor train')
     parser.add_argument('--tt_timeout', type=float, default=None, help='Timeout for tensor train')
     parser.add_argument('--tt_batch_size', type=int, default=512, help='Batch size for tensor train')
+    parser.add_argument('--tt_verbose', type=int, default=2, help='Verbosity level for tensor train')
     parser.add_argument('--tt_disable_tqdm', action='store_true', help='Disable tqdm for tensor train')
 
     args = parser.parse_args()

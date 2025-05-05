@@ -1,9 +1,7 @@
 import torch
 from tensor.layers import TensorTrainLayer, TensorOperatorLayer
 from tensor.bregman import XEAutogradBregman, SquareBregFunction
-import torch.nn.functional as F
 import numpy as np
-from sklearn.metrics import balanced_accuracy_score, mean_squared_error
 
 
 class TensorTrainWrapper:
@@ -16,6 +14,7 @@ class TensorTrainWrapper:
         self.num_swipes = tt_params.get('num_swipes', 1)
         self.lr = tt_params.get('lr', 1.0)
         self.method = tt_params.get('method', 'exact')
+        self.verbose = tt_params.get('verbose', 2)
         self.eps_min = tt_params.get('eps_min', 0.5)
         self.eps_max = tt_params.get('eps_max', 1.0)
         self.eps = np.geomspace(self.eps_max, self.eps_min, num=2*self.num_swipes).tolist()
@@ -53,7 +52,9 @@ class TensorTrainWrapper:
                 num_carriages=self.N,
                 output_shape=self.output_shape
             ).to(self.device)
-    def fit(self, X, y, X_val=None, y_val=None):
+    def fit(self, X, y):
+        X = X.to(self.device)
+        y = y.to(self.device)
         # Bregman function
         if self.task == 'classification':
             with torch.inference_mode():
@@ -76,7 +77,7 @@ class TensorTrainWrapper:
                 orthonormalize=self.orthonormalize,
                 convergence_criterion=convergence_criterion,
                 timeout=self.timeout,
-                verbose=2,
+                verbose=self.verbose,
                 data_device=self.device,
                 model_device=self.device,
                 disable_tqdm=self.disable_tqdm
@@ -84,6 +85,7 @@ class TensorTrainWrapper:
         except Exception as e:
             print('Training failed:', e)
     def predict(self, X):
+        X = X.to(self.device)
         self.model.eval()
         with torch.no_grad():
             y_pred = self.model(X.to(self.device))
