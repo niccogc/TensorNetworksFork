@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from collections import deque
 import re
 
-def visualize_tensornetwork(tensornetwork, layout='grid'):
+def visualize_tensornetwork(tensornetwork, layout='grid', fig=None, ax=None):
     """
     Visualize the tensornetwork as a graph.
 
@@ -22,6 +22,16 @@ def visualize_tensornetwork(tensornetwork, layout='grid'):
         for label, connected_node in node.connections.items():
             size = node.dim_size(label)  # Use the dim_size method to get the size of the dimension
             G.add_edge(node.name, connected_node.name, size=size)
+
+    if layout == 'spring':
+        pos = nx.spring_layout(G)
+        labels = nx.get_node_attributes(G, 'shape')
+        edge_labels = nx.get_edge_attributes(G, 'size')
+        if fig is None or ax is None:
+            plt.figure(figsize=(6, 6))
+        nx.draw(G, pos, with_labels=True, node_size=700, node_color='lightblue', font_size=10)
+        nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_color='red')
+        return
 
     pos = {}
     visited = set()
@@ -85,7 +95,8 @@ def visualize_tensornetwork(tensornetwork, layout='grid'):
                         queue.append(connected_node)
         traverse_and_position(tensornetwork.main_nodes)
 
-    plt.figure(figsize=(6, 6))
+    if fig is None or ax is None:
+        plt.figure(figsize=(6, 6))
     nx.draw(G, pos, with_labels=False, node_size=3000, node_color='lightblue', font_size=10, font_weight='bold')
 
     labels = {node: f"{node}\n{tuple(G.nodes[node]['shape'])}" for node in G.nodes}

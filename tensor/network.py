@@ -71,6 +71,11 @@ class TensorNetwork:
         self.left_stacks = self.compute_stacks("left", exclude_nodes)
         self.right_stacks = self.compute_stacks("right", exclude_nodes)
 
+    def reset_stacks(self):
+        """Resets the left and right stacks to None."""
+        self.left_stacks = None
+        self.right_stacks = None
+
     def get_stacks(self, node):
         """Returns the left and right stacks for the given node."""
         index = self.node_indices[node]
@@ -288,6 +293,12 @@ class TensorNetwork:
             A_f.add_((2 * eps) * torch.eye(A_f.shape[-1], dtype=A_f.dtype, device=A_f.device))
             b_f.add_((2 * eps) * node.tensor.flatten())
             x = torch.linalg.solve(A_f, -b_f)
+        elif method.lower() == 'ridge_cholesky':
+            A_f.add_((2 * eps) * torch.eye(A_f.shape[-1], dtype=A_f.dtype, device=A_f.device))
+            b_f.add_((2 * eps) * node.tensor.flatten())
+            L = torch.linalg.cholesky(A_f)
+            x = torch.cholesky_solve(-b_f.unsqueeze(-1), L)
+            x = x.squeeze(-1)
         elif method.lower() == 'cholesky':
             A_f_reg = A_f + eps * torch.eye(A_f.shape[-1], dtype=A_f.dtype, device=A_f.device)
             L = torch.linalg.cholesky(A_f_reg)
@@ -398,7 +409,7 @@ class TensorNetwork:
 
         return new_network
 
-    def accumulating_swipe(self, x, y_true, loss_fn, batch_size=-1, num_swipes=1, lr=1.0, method='exact', eps=1e-12, delta=1.0, convergence_criterion=None, orthonormalize=False, verbose=False, skip_second=False, timeout=None, data_device=None, model_device=None, disable_tqdm=None, block_callback=None, direction='l2r'):
+    def accumulating_swipe(self, x, y_true, loss_fn, batch_size=-1, num_swipes=1, lr=1.0, method='exact', eps=1e-12, delta=1.0, convergence_criterion=None, orthonormalize=False, verbose=False, skip_second=False, timeout=None, data_device=None, model_device=None, disable_tqdm=None, block_callback=None, direction='l2r', update_or_reset_stack='reset'):
         """Swipes the network to minimize the loss using accumulated A and b over mini-batches.
         Args:
             timeout (float or None): Maximum time in seconds to run. If None, no timeout.
@@ -470,7 +481,11 @@ class TensorNetwork:
                 if verbose > 1:
                     print(f"NS: {NS}, Left loss ({node_l2r.name if hasattr(node_l2r, 'name') else 'node'}):", total_loss / batches, f" (eps: {eps_})")
                 try:
-                    step_tensor = self.solve_system(node_l2r, A_out, b_out, J_out, method=method, eps=eps_, delta=delta)
+                    # Choose exact if eps is 0
+                    _method = method
+                    if eps_ == 0 and method == 'ridge_exact':
+                        _method = 'exact'
+                    step_tensor = self.solve_system(node_l2r, A_out, b_out, J_out, method=_method, eps=eps_, delta=delta)
                 except torch.linalg.LinAlgError:
                     if verbose > 0:
                         print(f"Singular system for node {node_l2r.name if hasattr(node_l2r, 'name') else 'node'}")
@@ -479,7 +494,11 @@ class TensorNetwork:
                 node_l2r.update_node(step_tensor, lr=lr)
                 if orthonormalize:
                     self.node_orthonormalize_left(node_l2r)
-                self.left_update_stacks(node_l2r)
+                if update_or_reset_stack == 'reset':
+                    self.left_stacks = None
+                    self.right_stacks = None
+                elif update_or_reset_stack == 'update':
+                    self.left_update_stacks(node_l2r)
 
                 # Convergence check after node update (pause timer here)
                 if convergence_criterion is not None:
@@ -558,7 +577,11 @@ class TensorNetwork:
                 if verbose > 1:
                     print(f"NS: {NS}, Right loss ({node_r2l.name if hasattr(node_r2l, 'name') else 'node'}):", total_loss / batches, f" (eps: {eps_})")
                 try:
-                    step_tensor = self.solve_system(node_r2l, A_out, b_out, J_out, method=method, eps=eps_, delta=delta)
+                    # Choose exact if eps is 0
+                    _method = method
+                    if eps_ == 0 and method == 'ridge_exact':
+                        _method = 'exact'
+                    step_tensor = self.solve_system(node_r2l, A_out, b_out, J_out, method=_method, eps=eps_, delta=delta)
                 except torch.linalg.LinAlgError:
                     if verbose > 0:
                         print(f"Singular system for node {node_r2l.name if hasattr(node_r2l, 'name') else 'node'}")
@@ -567,7 +590,11 @@ class TensorNetwork:
                 node_r2l.update_node(step_tensor, lr=lr)
                 if orthonormalize:
                     self.node_orthonormalize_right(node_r2l)
-                self.right_update_stacks(node_r2l)
+                if update_or_reset_stack == 'reset':
+                    self.left_stacks = None
+                    self.right_stacks = None
+                elif update_or_reset_stack == 'update':
+                    self.right_update_stacks(node_r2l)
 
                 # Convergence check after node update (pause timer here)
                 if convergence_criterion is not None:

@@ -126,7 +126,7 @@ class TensorNode:
     def squeeze(self, exclude=set()):
         """Squeezes the tensor and removes singleton dimensions."""
         # Remove singleton dimensions
-        singleton = [s == 1 and l not in exclude and l not in self.connections for s, l in zip(self.shape, self.dim_labels)]
+        singleton = [s <= 1 and l not in exclude and l not in self.connections for s, l in zip(self.shape, self.dim_labels)]
         if any(singleton):
             squeezed_labels = [label for label, s in zip(self.dim_labels, singleton) if s]
             squeezed_indices = [i for i, s in enumerate(singleton) if s]

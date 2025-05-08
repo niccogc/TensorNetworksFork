@@ -33,14 +33,39 @@ def evaluate_model(model, X, y_true, task):
         return rmse
 
 def train_model(args, data=None):
-    args.version = '05-05-25v2'
+    args.version = '05-05-25v3'
+    # WandB setup
+    wandb_enabled = False
+    if args.wandb_project:
+        import wandb
+        
+        wandb.init(project=args.wandb_project, entity=args.wandb_entity)
+        wandb_enabled = True
+
+        # Update args with wandb config values
+        for key, value in list(wandb.config.items()):
+            setattr(args, key, value)
+            print(f"WandB overriding parameter: {key} = {value}")
+        
+        # Then update the config with the args
+        config_dict = vars(args)
+        wandb.config.update(config_dict)
+    
     if data is None:
-        data = load_tabular_data(args.data_file, args.data_device)
+        path = os.path.join(args.data_dir, args.dataset_name + '_tensor.pt')
+        data = load_tabular_data(path, args.data_device)
     X_train, y_train, X_val, y_val, X_test, y_test = data
 
-    # Get dataset name
-    dataset_name = os.path.splitext(os.path.basename(args.data_file))[0]
-    dataset_name = dataset_name.replace('_tensor', '')
+    # For each y, if it is not 2D, add a dimension
+    if y_train.ndim == 1 and args.task == 'regression':
+        y_train = y_train.unsqueeze(-1)
+        y_val = y_val.unsqueeze(-1)
+        y_test = y_test.unsqueeze(-1)
+    elif y_train.ndim == 1 and args.task == 'classification':
+        num_classes = len(torch.unique(y_train.to(dtype=torch.long)))
+        y_train = torch.nn.functional.one_hot(y_train.to(dtype=torch.long), num_classes=num_classes)
+        y_val = torch.nn.functional.one_hot(y_val.to(dtype=torch.long), num_classes=num_classes)
+        y_test = torch.nn.functional.one_hot(y_test.to(dtype=torch.long), num_classes=num_classes)
 
     xgb_params = {
         'n_estimators': args.xgb_n_estimators,
@@ -72,6 +97,8 @@ def train_model(args, data=None):
         'num_swipes': args.tt_num_swipes,
         'lr': args.tt_lr,
         'method': args.tt_method,
+        'lin_bond': args.tt_lin_bond,
+        'lin_dim': args.tt_lin_dim,
         'verbose': args.tt_verbose,
         'eps_min': args.tt_eps_min,
         'eps_max': args.tt_eps_max,
@@ -80,26 +107,22 @@ def train_model(args, data=None):
         'timeout': args.tt_timeout,
         'batch_size': args.tt_batch_size,
         'disable_tqdm': args.tt_disable_tqdm or args.disable_tqdm,
+        'early_stopping': args.tt_early_stopping,
+        'track_eval': args.tt_track_eval,
+        'save_every': args.tt_save_every,
     }
 
     # If choosing SVM and the sample size is larger than 1000000, skip
-    if args.model_type == 'svm' and X_train.shape[0] > 1000000:
-        print(f"Skipping SVM training for {dataset_name} due to large sample size.")
+    if args.model_type == 'svm' and X_train.shape[0] > 10000:
+        print(f"Skipping SVM training for {args.dataset_name} due to large sample size.")
+        if wandb_enabled:
+            wandb.finish()
+            wandb.teardown()
         return
-
-    # WandB setup
-    wandb_enabled = False
-    config = vars(args)
-    config['dataset_name'] = dataset_name
-    if args.wandb_project:
-        import wandb
-        
-        wandb.init(project=args.wandb_project, config=config, entity=args.wandb_entity)
-        wandb_enabled = True
 
     # Save model type and hyperparameters to config
     if args.wandb_project:
-        config_dict = vars(args)
+        config_dict = {}
         config_dict['model_type'] = args.model_type
         if args.model_type == 'xgboost':
             config_dict['xgboost_params'] = xgb_params
@@ -123,12 +146,18 @@ def train_model(args, data=None):
             wandb.config.update({'num_parameters': sum([p.numel() for p in model.model.parameters()])})
     elif args.model_type == 'tensor':
         torch.set_default_dtype(torch.float64)
+        X_train = X_train.to(torch.float64)
+        y_train = y_train.to(torch.float64)
+        X_val = X_val.to(torch.float64)
+        y_val = y_val.to(torch.float64)
+        X_test = X_test.to(torch.float64)
+        y_test = y_test.to(torch.float64)
         # Use torch tensors for tensor train
         model = TensorTrainWrapper(input_dim, output_dim, tt_params, task=args.task, device=args.device)
         # Add num parameters to config
         if wandb_enabled:
             wandb.config.update({'num_parameters': model.model.num_parameters()})
-        converged = model.fit(X_train, y_train)
+        converged = model.fit(X_train, y_train, X_val if args.tt_track_eval else None, y_val if args.tt_track_eval else None)
         if wandb_enabled:
             wandb.log({'singular': not converged})
     else:
@@ -150,10 +179,12 @@ def train_model(args, data=None):
             wandb.log({'val/rmse': val_score, 'test/rmse': test_score})
     if wandb_enabled:
         wandb.finish()
+        wandb.teardown()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Tensor Network Training for Tabular Data')
-    parser.add_argument('--data_file', type=str, required=True, help='Path to .pt file with {"X": X, "y": y}')
+    parser.add_argument('--data_dir', type=str, default='', help='Directory for data files')
+    parser.add_argument('--dataset_name', type=str, required=True, help='Name of the dataset (without .pt extension)')
     parser.add_argument('--task', type=str, choices=['classification', 'regression'], required=True, help='Task type: classification or regression')
     parser.add_argument('--device', type=str, default='cuda')
     parser.add_argument('--data_device', type=str, default='cuda', choices=['cpu', 'cuda'], help='Device to store the dataset (cpu or cuda)')
@@ -187,7 +218,7 @@ if __name__ == '__main__':
     parser.add_argument('--mlp_type', type=str, default='standard', choices=['standard', 'residual', 'pinet'], help='MLP type: standard, residual, or pinet')
 
     # Tensor Train hyperparameters
-    parser.add_argument('--tt_layer_type', type=str, choices=['tt', 'operator', 'conv'], default='tt', help='Layer type for tensor train')
+    parser.add_argument('--tt_layer_type', type=str, choices=['tt', 'operator', 'linear'], default='tt', help='Layer type for tensor train')
     parser.add_argument('--tt_N', type=int, default=3, help='Number of carriages for tensor train')
     parser.add_argument('--tt_r', type=int, default=3, help='Bond dimension for tensor train')
     parser.add_argument('--tt_num_swipes', type=int, default=1, help='Number of swipes for tensor train')
@@ -196,13 +227,17 @@ if __name__ == '__main__':
     parser.add_argument('--tt_eps_max', type=float, default=1.0, help='Initial Epsilon for tensor train')
     parser.add_argument('--tt_eps_min', type=float, default=1e-3, help='Final Epsilon for tensor train')
     parser.add_argument('--tt_delta', type=float, default=1.0, help='Delta for tensor train')
-    parser.add_argument('--tt_num_kernels', type=int, default=1, help='Number of kernels for tensor train')
     parser.add_argument('--tt_CB', type=int, default=4, help='Convolution bond for tensor train')
     parser.add_argument('--tt_orthonormalize', action='store_true', help='Orthonormalize for tensor train')
     parser.add_argument('--tt_timeout', type=float, default=None, help='Timeout for tensor train')
     parser.add_argument('--tt_batch_size', type=int, default=512, help='Batch size for tensor train')
     parser.add_argument('--tt_verbose', type=int, default=2, help='Verbosity level for tensor train')
     parser.add_argument('--tt_disable_tqdm', action='store_true', help='Disable tqdm for tensor train')
+    parser.add_argument('--tt_lin_bond', type=int, default=1, help='Bond dimension for linear transform in tensor train')
+    parser.add_argument('--tt_lin_dim', type=float, default=1.0, help='Output dimension for linear transform in tensor train')
+    parser.add_argument('--tt_early_stopping', type=int, default=0, help='Early stopping patience for tensor train')
+    parser.add_argument('--tt_track_eval', action='store_true', help='Track evaluation during training for tensor train')
+    parser.add_argument('--tt_save_every', type=int, default=10, help='Save model every N epochs for tensor train')
 
     args = parser.parse_args()
     train_model(args)  # loads data inside main by default

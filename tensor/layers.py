@@ -11,28 +11,20 @@ class TensorNetworkLayer(nn.Module):
         self.labels = labels if labels is not None else tensor_network.output_labels
         self.parametrized = False
     
-    def parametrize(self):
-        self.tensor_params = nn.ParameterList()
-        for node in self.tensor_network.train_nodes:
-            self.tensor_params.append(nn.Parameter(node.tensor))
-            node.tensor = self.tensor_params[-1]
-        self.parametrized = True
+    def node_states(self):
+        """Returns the state dictionary of the nodes."""
+        tensor_params = {}
+        for i, node in enumerate(self.tensor_network.train_nodes):
+            tensor_params[f"tensor_param_{i}"] = node.tensor.detach().clone()
+        return tensor_params
     
-    def state_dict(self, *args, **kwargs):
-        """Returns the state dictionary of the layer."""
-        if not self.parametrized:
-            self.parametrize()
-        return super(TensorNetworkLayer, self).state_dict(*args, **kwargs)
-    
-    def load_state_dict(self, state_dict, *args, **kwargs):
-        """Loads the state dictionary into the layer."""
-        if not self.parametrized:
-            self.parametrize()
-        super(TensorNetworkLayer, self).load_state_dict(state_dict, *args, **kwargs)
-        for node, param in zip(self.tensor_network.train_nodes, self.tensor_params):
-            node.tensor = param
-        self.parametrized = True
-        return self
+    def load_node_states(self, tensor_params):
+        """Loads the state dictionary into the nodes."""
+        for i, node in enumerate(self.tensor_network.train_nodes):
+            if f"tensor_param_{i}" in tensor_params:
+                node.tensor.data.copy_(tensor_params[f"tensor_param_{i}"].detach().clone())
+            else:
+                raise ValueError(f"Missing parameter: tensor_param_{i}")
 
     def cuda(self, *args, **kwargs):
         """Moves the layer to the GPU."""
@@ -325,14 +317,14 @@ class TensorConvolutionTrainLayer(TensorNetworkLayer):
         self.tensor_network = TensorNetwork(self.x_nodes, self.train_blocks, self.tensor_network.train_nodes + [conv_block_new, train_block_new], output_labels=self.labels)
 
 class TensorConvolutionGridTrainLayer(TensorNetworkLayer):
-    def __init__(self, num_carriages, num_layers, bond_dim, layer_bond, num_patches, patch_pixels, output_shape, ring=False, convolution_bond=-1):
+    def __init__(self, num_carriages, num_layers, bond_dim, lin_dim, lin_bond, num_patches, patch_pixels, output_shape, ring=False, convolution_bond=-1):
         """Initializes a TensorConvolutionGridTrainLayer."""
         if ring:
             raise NotImplementedError("Ring structure is not implemented for TensorConvolutionGridTrainLayer.")
         self.num_carriages = num_carriages
         self.num_layers = num_layers
         self.bond_dim = bond_dim
-        self.layer_bond = layer_bond
+        self.lin_dim = lin_dim
         self.num_patches = num_patches
         self.output_shape = output_shape if isinstance(output_shape, tuple) else (output_shape,)
         self.ring = ring
@@ -368,10 +360,10 @@ class TensorConvolutionGridTrainLayer(TensorNetworkLayer):
                 else:
                     c_dim = 1
                     c_label = 'c'
-                left_bond = bond_dim if i != 1 else 1
-                right_bond = bond_dim if i != num_carriages else 1
+                left_bond = max(1, (bond_dim if l == num_layers - 1 else lin_bond) if i != 1 else 1)
+                right_bond = max(1, (bond_dim if l == num_layers - 1 else lin_bond) if i != num_carriages else 1)
                 if l == 0:
-                    up_bond = layer_bond if num_layers > 1 else 1
+                    up_bond = lin_dim if num_layers > 1 else 1
                     labels = [f'v{l}_{i}', f'r{l}_{i}', c_label, 'patches', f'r{l}_{i+1}', f'v{l+1}_{i}']
                     shape = (
                         1,
@@ -382,8 +374,8 @@ class TensorConvolutionGridTrainLayer(TensorNetworkLayer):
                         up_bond
                     )
                 else:
-                    up_bond = layer_bond if l < num_layers-1 else 1
-                    down_bond = layer_bond
+                    up_bond = lin_dim if l < num_layers-1 else 1
+                    down_bond = lin_dim
                     labels = [f'v{l}_{i}', f'r{l}_{i}', c_label, f'r{l}_{i+1}', f'v{l+1}_{i}']
                     shape = (
                         down_bond,
@@ -400,6 +392,8 @@ class TensorConvolutionGridTrainLayer(TensorNetworkLayer):
 
         # Connect horizontally within each layer
         for l in range(num_layers):
+            if lin_bond <= 0 and l != num_layers - 1:
+                continue
             for i in range(1, num_carriages):
                 train_blocks[l][i-1].connect(train_blocks[l][i], f'r{l}_{i+1}', priority=1)
 
@@ -516,3 +510,161 @@ class CPD(TensorNetworkLayer):
         # Create a TensorNetwork
         tensor_network = TensorNetwork(self.x_nodes, self.nodes, output_labels=self.labels)
         super(CPD, self).__init__(tensor_network)
+
+class TensorTrainLinearLayer(TensorNetworkLayer):
+    def __init__(self, num_carriages, bond_dim, input_features, linear_dim, linear_bond=1,
+                 output_shape=tuple(), ring=False, squeeze=True, connect_linear=False):
+        """Initializes a TensorTrainLinearLayer with an intermediate linear block."""
+        self.num_carriages = num_carriages
+        self.bond_dim = bond_dim
+        self.input_features = input_features
+        self.linear_dim = linear_dim
+        self.linear_bond = linear_bond
+        self.output_shape = output_shape if isinstance(output_shape, tuple) else (output_shape,)
+        self.ring = ring
+        self.connect_linear = connect_linear
+
+        # create input nodes
+        self.x_nodes = []
+        for i in range(1, num_carriages+1):
+            x = TensorNode((1, input_features), ['s', 'p'], name=f"X{i}")
+            self.x_nodes.append(x)
+
+        # build linear and train blocks
+        self.linear_blocks = []
+        self.train_blocks = []
+        self.nodes = []  # main nodes are train blocks
+        self.labels = ['s']
+        self.train_nodes = []
+        for i in range(1, num_carriages+1):
+            # linear block shape/labels
+            if self.connect_linear:
+                shape_lin = (linear_bond if i != 1 else 1, input_features, linear_dim, linear_bond if i != num_carriages else 1)
+                labels_lin = [f'l{i}', 'p', 'm', f'l{i+1}']
+                lin = TensorNode(shape_lin, labels_lin, l=f'l{i}', r=f'l{i+1}', name=f"L{i}")
+            else:
+                shape_lin = (input_features, linear_dim)
+                labels_lin = ['p', 'm']
+                lin = TensorNode(shape_lin, labels_lin, name=f"L{i}")
+            self.train_nodes.append(lin)
+            
+            # Connect x_node to linear block explicitly
+            self.x_nodes[i-1].connect(lin, 'p', priority=2)
+            
+            # optional connect between linear blocks
+            if self.connect_linear and i>1:
+                self.linear_blocks[-1].connect(lin, f'l{i}', priority=1)
+            self.linear_blocks.append(lin)
+
+            # prepare train block
+            # output dims
+            if i-1 < len(self.output_shape):
+                up = self.output_shape[i-1]
+                up_label = f'c{i}'
+                self.labels.append(up_label)
+            else:
+                up = 1
+                up_label = 'c'
+            # bond dims
+            left_label = 'rr' if ring and i==1 else f'r{i}'
+            right_label = 'rr' if ring and i==num_carriages else f'r{i+1}'
+            if ring:
+                left, right = bond_dim, bond_dim
+            else:
+                if i==1: left, right = 1, bond_dim
+                elif i==num_carriages: left, right = bond_dim, 1
+                else: left, right = bond_dim, bond_dim
+            # create and connect train node
+            tr = TensorNode((left, up, linear_dim, right),
+                            [left_label, up_label, 'm', right_label],
+                            l=left_label, r=right_label, name=f"A{i}")
+            self.train_nodes.append(tr)
+            
+            # Connect linear block to train block explicitly
+            tr.connect(lin, 'm', priority=2)
+            
+            if i>1:
+                self.train_blocks[-1].connect(tr, left_label, priority=1)
+            if ring and i==num_carriages:
+                tr.connect(self.train_blocks[0], right_label, priority=0)
+            self.train_blocks.append(tr)
+            self.nodes.append(tr)
+
+        # squeeze singleton dims
+        if squeeze:
+            for node in self.linear_blocks + self.nodes:
+                node.squeeze(self.labels)
+
+        # build tensor network including linear and train as train_nodes
+        tensor_network = TensorNetwork(
+            self.x_nodes, self.nodes,
+            train_nodes=self.train_nodes,
+            output_labels=self.labels
+        )
+        super(TensorTrainLinearLayer, self).__init__(tensor_network)
+
+class TensorTrainSplitInputLayer(TensorNetworkLayer):
+    def __init__(self, num_wagons, bond_dim, input_shape=tuple(), output_shape=tuple(), axle_bond=1):
+        """Initializes a TensorTrainSplitInputLayer."""
+        num_input_dims = len(input_shape)
+        self.num_wagons = num_wagons
+        self.bond_dim = bond_dim
+        self.axle_bond = axle_bond
+        self.input_shape = input_shape
+        self.output_shape = output_shape if isinstance(output_shape, tuple) else (output_shape,)
+        self.labels = ['s']
+
+        self.x_nodes = []
+        self.nodes = []
+        for i in range(num_wagons):
+            for j in range(num_input_dims):
+                idx = i * num_input_dims + j
+                if j == 0:
+                    x_node = TensorNode((1,)+input_shape, ['s']+[f'I{i * num_input_dims + l}' for l in range(num_input_dims)], name=f"X{i}")
+                    self.x_nodes.append(x_node)
+                if idx < len(self.output_shape):
+                    up = self.output_shape[idx]
+                    up_label = f'c{idx}'
+                    self.labels.append(up_label)
+                else:
+                    up = 1
+                    up_label = 'c'
+                down = input_shape[j]
+                down_label = f'I{idx}'
+                
+                left_label = f'r{idx}'
+                right_label = f'r{idx+1}'
+                # First cart in total
+                if (i == 0 and j == 0):
+                    left = 1
+                    right = bond_dim
+                # Last cart in total
+                elif (i == num_wagons-1 and j == num_input_dims-1):
+                    left = bond_dim
+                    right = 1
+                # First cart in wagon
+                elif (j == 0):
+                    left = axle_bond
+                    right = bond_dim
+                # Last cart in wagon
+                elif (j == num_input_dims-1):
+                    left = bond_dim
+                    right = axle_bond
+                # Middle cart in wagon
+                else:
+                    left = bond_dim
+                    right = bond_dim
+                # Create the node
+                node = TensorNode((left, up, down, right), [left_label, up_label, down_label, right_label], l=left_label, r=right_label, name=f"A{idx}")
+                # If not the first wagon, connect to the previous node
+                if i > 0 or j > 0:
+                    self.nodes[-1].connect(node, left_label, priority=1)
+                node.connect(self.x_nodes[i], down_label, priority=2)
+                self.nodes.append(node)
+        
+        # Squeeze singleton dimensions
+        for node in self.nodes:
+            node.squeeze(self.labels)
+        # Create a TensorNetwork
+        tensor_network = TensorNetwork(self.x_nodes, self.nodes, output_labels=self.labels)
+        super(TensorTrainSplitInputLayer, self).__init__(tensor_network)
