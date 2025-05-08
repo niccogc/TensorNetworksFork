@@ -5,9 +5,11 @@ class BregFunction(torch.nn.Module):
     def transform_forward(self, x, y):
         return x, y
 
-    def forward(self, x, y):
+    def forward(self, x, y, only_loss=False):
         x, y = self.transform_forward(x, y)
         loss = self.psi(x) - self.psi(y) - self.prod(self.d(y), x-y)
+        if only_loss:
+            return loss
         d_loss = self.grad(x, y)
         sqd_loss = self.hess(x, y)
         return loss, d_loss, sqd_loss
@@ -55,7 +57,7 @@ class SoftmaxSquaredLoss(torch.nn.Module):
         super().__init__()
         self.w = w
 
-    def forward(self, x, y):
+    def forward(self, x, y, only_loss=False):
         z = self.w * x
         log_s = torch.log_softmax(z, dim=-1)
         s = log_s.exp()  # softmax(w*x)
@@ -64,6 +66,9 @@ class SoftmaxSquaredLoss(torch.nn.Module):
         # --------
         # Loss: 0.5 * ||s - y||^2
         loss = 0.5 * (diff ** 2).sum(dim=-1, keepdim=True)
+
+        if only_loss:
+            return loss
 
         # --------
         # Gradient: grad = w * J^T @ diff
@@ -89,7 +94,7 @@ class KLDivBregman(BregFunction):
         self.w = w
         self.grad_clip = grad_clip
 
-    def forward(self, x, y):
+    def forward(self, x, y, only_loss=False):
         """
         Parameters:
           x : logits (un-normalized values)
@@ -106,6 +111,8 @@ class KLDivBregman(BregFunction):
         log_s = torch.log_softmax(z, dim=-1) #append 0 and softmax -> remove 0
 
         loss = F.cross_entropy(log_s, y.argmax(dim=-1), reduction='none') # shape [..., C]
+        if only_loss:
+            return loss
         s = log_s.exp()
         y = y # remove the last column (corresponding to the appended 0)
 
@@ -134,7 +141,7 @@ class BinaryKLDivBregman(BregFunction):
         super().__init__()
         self.w = w
 
-    def forward(self, x, y, eps=1e-12):
+    def forward(self, x, y, only_loss=False, eps=1e-12):
         """
         Parameters:
           x : logits (un-normalized values)
@@ -158,6 +165,9 @@ class BinaryKLDivBregman(BregFunction):
             y < 1, (1 - y) * torch.log((1 - y) / (1 - s)), torch.zeros_like(y)
         )
 
+        if only_loss:
+            return kl
+
         grad = self.w * (s - y)
         hessian = (self.w ** 2 * s * (1 - s)).unsqueeze(-1)
 
@@ -168,7 +178,7 @@ class XEAutogradBregman(BregFunction):
         super().__init__()
         self.w = w
 
-    def forward(self, x, y):
+    def forward(self, x, y, only_loss=False):
         x = x.requires_grad_(True)
         
         z = self.w * x # shape [..., C]
@@ -177,6 +187,8 @@ class XEAutogradBregman(BregFunction):
         log_s = torch.log_softmax(z, dim=-1) #append 0 and softmax -> remove 0
 
         loss = F.cross_entropy(log_s, y.argmax(dim=-1), reduction='none') # shape [..., C]
+        if only_loss:
+            return loss
 
         # Gradient of loss w.r.t x
         d_loss = torch.autograd.grad(
@@ -204,7 +216,7 @@ class AutogradBregman(BregFunction):
             x, y = self._transform_forward(x, y)
         return super().transform_forward(x, y)
 
-    def forward(self, x, y):
+    def forward(self, x, y, only_loss=False):
         x = x.requires_grad_(True)
         x, y = self.transform_forward(x, y)
 
@@ -221,6 +233,9 @@ class AutogradBregman(BregFunction):
 
         inner = (d_phi_x * diff).sum(-1, keepdim=True)
         loss = phi_y - phi_x - inner
+
+        if only_loss:
+            return loss
 
         # Gradient of loss w.r.t x
         d_loss = torch.autograd.grad(

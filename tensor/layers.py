@@ -11,18 +11,24 @@ class TensorNetworkLayer(nn.Module):
         self.labels = labels if labels is not None else tensor_network.output_labels
         self.parametrized = False
     
-    def node_states(self):
+    def node_states(self, detach=True):
         """Returns the state dictionary of the nodes."""
         tensor_params = {}
         for i, node in enumerate(self.tensor_network.train_nodes):
-            tensor_params[f"tensor_param_{i}"] = node.tensor.detach().clone()
+            if detach:
+                tensor_params[f"tensor_param_{i}"] = node.tensor.detach().clone()
+            else:
+                tensor_params[f"tensor_param_{i}"] = node.tensor
         return tensor_params
     
-    def load_node_states(self, tensor_params):
+    def load_node_states(self, tensor_params, set_value=False):
         """Loads the state dictionary into the nodes."""
         for i, node in enumerate(self.tensor_network.train_nodes):
             if f"tensor_param_{i}" in tensor_params:
-                node.tensor.data.copy_(tensor_params[f"tensor_param_{i}"].detach().clone())
+                if not set_value:
+                    node.tensor.data.copy_(tensor_params[f"tensor_param_{i}"].detach().clone())
+                else:
+                    node.tensor = tensor_params[f"tensor_param_{i}"]
             else:
                 raise ValueError(f"Missing parameter: tensor_param_{i}")
 

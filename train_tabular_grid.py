@@ -39,12 +39,13 @@ if __name__ == '__main__':
     parser.add_argument('--mlp_hidden_layers', type=int, nargs='+', default=[64, 64], help='Hidden layer sizes for MLP')
     parser.add_argument('--mlp_activation', type=str, default='relu', help='Activation function for MLP')
     parser.add_argument('--mlp_lr', type=float, default=1e-3, help='Learning rate for MLP')
-    parser.add_argument('--mlp_epochs', type=int, default=50, help='Number of epochs for MLP')
-    parser.add_argument('--mlp_batch_size', type=int, default=128, help='Batch size for MLP')
+    parser.add_argument('--mlp_epochs', type=int, default=25, help='Number of epochs for MLP')
+    parser.add_argument('--mlp_batch_size', type=int, default=512, help='Batch size for MLP')
     parser.add_argument('--mlp_device', type=str, default='cuda', help='Device for MLP')
+    parser.add_argument('--mlp_type', type=str, default='standard', choices=['standard', 'residual', 'pinet'], help='MLP type: standard, residual, or pinet')
 
     # Tensor Train hyperparameters
-    parser.add_argument('--tt_layer_type', type=str, choices=['tt', 'operator'], default='tt', help='Layer type for tensor train')
+    parser.add_argument('--tt_layer_type', type=str, choices=['tt', 'operator', 'linear'], default='tt', help='Layer type for tensor train')
     parser.add_argument('--tt_N', type=int, default=3, help='Number of carriages for tensor train')
     parser.add_argument('--tt_r', type=int, default=3, help='Bond dimension for tensor train')
     parser.add_argument('--tt_num_swipes', type=int, default=1, help='Number of swipes for tensor train')
@@ -53,10 +54,16 @@ if __name__ == '__main__':
     parser.add_argument('--tt_eps_max', type=float, default=1.0, help='Initial Epsilon for tensor train')
     parser.add_argument('--tt_eps_min', type=float, default=1e-3, help='Final Epsilon for tensor train')
     parser.add_argument('--tt_delta', type=float, default=1.0, help='Delta for tensor train')
+    parser.add_argument('--tt_CB', type=int, default=4, help='Convolution bond for tensor train')
     parser.add_argument('--tt_orthonormalize', action='store_true', help='Orthonormalize for tensor train')
     parser.add_argument('--tt_timeout', type=float, default=None, help='Timeout for tensor train')
     parser.add_argument('--tt_batch_size', type=int, default=512, help='Batch size for tensor train')
+    parser.add_argument('--tt_verbose', type=int, default=2, help='Verbosity level for tensor train')
     parser.add_argument('--tt_disable_tqdm', action='store_true', help='Disable tqdm for tensor train')
+    parser.add_argument('--tt_lin_bond', type=int, default=1, help='Bond dimension for linear transform in tensor train')
+    parser.add_argument('--tt_lin_dim', type=float, default=1.0, help='Output dimension for linear transform in tensor train')
+    parser.add_argument('--tt_early_stopping', type=int, default=0, help='Early stopping patience for tensor train')
+    parser.add_argument('--tt_track_eval', action='store_true', help='Track evaluation during training for tensor train')
 
     # For simplicity, parse known args and leave the rest to be set by grid
     args, _ = parser.parse_known_args()

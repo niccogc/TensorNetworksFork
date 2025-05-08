@@ -5,6 +5,8 @@ from collections import deque
 from tensor.node import TensorNode
 from tqdm.auto import tqdm
 import time
+import numpy as np
+from scipy.sparse.linalg import LinearOperator, cg
 
 class TensorNetwork:
     def __init__(self, input_nodes, main_nodes, train_nodes=None, output_labels=('s',), sample_dim='s'):
@@ -409,7 +411,7 @@ class TensorNetwork:
 
         return new_network
 
-    def accumulating_swipe(self, x, y_true, loss_fn, batch_size=-1, num_swipes=1, lr=1.0, method='exact', eps=1e-12, delta=1.0, convergence_criterion=None, orthonormalize=False, verbose=False, skip_second=False, timeout=None, data_device=None, model_device=None, disable_tqdm=None, block_callback=None, direction='l2r', update_or_reset_stack='reset'):
+    def accumulating_swipe(self, x, y_true, loss_fn, batch_size=-1, num_swipes=1, lr=1.0, method='exact', eps=1e-12, delta=1.0, convergence_criterion=None, orthonormalize=False, verbose=False, skip_second=False, timeout=None, data_device=None, model_device=None, disable_tqdm=None, block_callback=None, loss_callback=None, direction='l2r', update_or_reset_stack='reset'):
         """Swipes the network to minimize the loss using accumulated A and b over mini-batches.
         Args:
             timeout (float or None): Maximum time in seconds to run. If None, no timeout.
@@ -499,6 +501,8 @@ class TensorNetwork:
                     self.right_stacks = None
                 elif update_or_reset_stack == 'update':
                     self.left_update_stacks(node_l2r)
+                if loss_callback is not None:
+                    loss_callback(NS, node_l2r, total_loss / batches)
 
                 # Convergence check after node update (pause timer here)
                 if convergence_criterion is not None:
@@ -595,6 +599,8 @@ class TensorNetwork:
                     self.right_stacks = None
                 elif update_or_reset_stack == 'update':
                     self.right_update_stacks(node_r2l)
+                if loss_callback is not None:
+                    loss_callback(NS, node_r2l, total_loss / batches)
 
                 # Convergence check after node update (pause timer here)
                 if convergence_criterion is not None:
@@ -942,7 +948,15 @@ class TensorNetwork:
         return True
     
 
-    def grad_swipe(self, x, y_true, loss_fn, batch_size=1, num_swipes=1, lr=1.0, num_iter=100, verbose=False, timeout=None, data_device=None, model_device=None, disable_tqdm=None, block_callback=None):
+    def scipy_swipe(self, x, y_true, loss_fn, solver, batch_size=1, num_swipes=1, lr=1.0, max_iter=50, tol=1e-6, verbose=False, timeout=None, data_device=None, model_device=None, disable_tqdm=None, block_callback=None, loss_callback=None):
+        """
+        Swipes the network to minimize the loss using SciPy for each node, without forming the full Gramian.
+        Args:
+            max_iter (int): Maximum Lanczos steps per node.
+            tol (float): Residual tolerance for convergence.
+            Other args as in accumulating_swipe.
+        """
+
         data_size = len(x) if isinstance(x, torch.Tensor) else x[0].shape[0]
         if batch_size <= 0:
             batch_size = data_size
@@ -961,32 +975,75 @@ class TensorNetwork:
         if disable_tqdm is None:
             disable_tqdm = int(verbose) < 2
 
+        node_sols = {}
+
         for NS in range(num_swipes):
-            for node in self.train_nodes:
-                for i in tqdm(range(num_iter)):
-                    if timeout is not None and (time.time() - start_time) > timeout:
-                        print(f"Timeout reached ({timeout} seconds). Stopping lanczos_swipe.")
-                        return False
+            for node in self.train_nodes if NS % 2 == 0 else reversed(self.train_nodes):
+                if timeout is not None and (time.time() - start_time) > timeout:
+                    print(f"Timeout reached ({timeout} seconds). Stopping lanczos_swipe.")
+                    return False
 
-                    # Precompute batches of HJ and b for this node
-                    b_rhs = torch.zeros_like(node.tensor)
-                    loss_total = 0.0
-                    for b in range(batches):
-                        x_batch = x[b*batch_size:(b+1)*batch_size] if isinstance(x, torch.Tensor) else [x[i][b*batch_size:(b+1)*batch_size] for i in range(len(x))]
-                        y_batch = y_true[b*batch_size:(b+1)*batch_size]
-                        x_batch = move_batch(x_batch)
-                        y_batch = move_batch(y_batch)
+                # Precompute batches of HJ and b for this node
+                b_rhs = torch.zeros_like(node.tensor)
+                d_losss = []
+                dd_losss = []
+                loss_total = 0.0
+                for b in range(batches):
+                    x_batch = x[b*batch_size:(b+1)*batch_size] if isinstance(x, torch.Tensor) else [x[i][b*batch_size:(b+1)*batch_size] for i in range(len(x))]
+                    y_batch = y_true[b*batch_size:(b+1)*batch_size]
+                    x_batch = move_batch(x_batch)
+                    y_batch = move_batch(y_batch)
 
-                        y_pred = self.forward(x_batch).permute_first(*self.output_labels).tensor
-                        loss, d_loss, sqd_loss = loss_fn.forward(y_pred, y_batch)
+                    y_pred = self.forward(x_batch).permute_first(*self.output_labels).tensor
+                    loss, d_loss, sqd_loss = loss_fn.forward(y_pred, y_batch)
 
-                        b_vec = self.get_b(node, d_loss)
-                        b_rhs.add_(b_vec)
+                    b_vec = self.get_b(node, d_loss)
+                    b_rhs.add_(b_vec)
+                    
+                    d_losss.append(d_loss)
+                    dd_losss.append(sqd_loss)
+                    
+                    if loss_callback is not None:
                         loss_total += loss.mean().item()
-                        
-                    step_tensor = -b_rhs / batches
-                    node.update_node(step_tensor, lr=lr)
-                    self.left_update_stacks(node)
-                    if block_callback is not None:
-                        block_callback(NS, node, loss_total / batches)
+                if loss_callback is not None:
+                    loss_callback(loss_total / batches)
+
+                # Helper: matvec for this node (A @ v)
+                t_bar = tqdm(total=max_iter, desc=f"Iterative pass ({node.name if hasattr(node, 'name') else 'node'})", disable=disable_tqdm)
+                def matvec(v):
+                    v = torch.tensor(v, dtype=b_rhs.dtype, device=b_rhs.device).reshape_as(b_rhs)
+                    Av = 0
+                    for b, d_loss, dd_loss in zip(range(batches), d_losss, dd_losss):
+                        x_batch = x[b*batch_size:(b+1)*batch_size] if isinstance(x, torch.Tensor) else [x[i][b*batch_size:(b+1)*batch_size] for i in range(len(x))]
+                        x_batch = move_batch(x_batch)
+
+
+                        self.set_input(x_batch)
+                        self.reset_stacks()
+                        self.recompute_all_stacks()
+
+                        prep_J = self.get_J(node, d_loss)
+                        J = prep_J['J']
+                        J_einsum = prep_J['einsum']
+                        node_ein = prep_J['node_ein']
+                        d_loss_ein = prep_J['d_loss_ein']
+                        dd_loss_ein = prep_J['dd_loss_ein']
+                        coeff_ein = prep_J['coeff_ein']
+                        coeff = torch.einsum(f"{J_einsum},{node_ein},{dd_loss_ein}->{coeff_ein}", J.tensor, v, dd_loss)
+                        Av += torch.einsum(f"{J_einsum},{d_loss_ein}->{node_ein}", J.tensor, coeff)
+                    t_bar.update(1)
+                    return Av.flatten().float().cpu().numpy()
+
+                # Define the CG solver
+                b_np = b_rhs.flatten().float().cpu().numpy()
+                with torch.inference_mode():
+                    A_op = LinearOperator((b_np.shape[0], b_np.shape[0]), matvec=matvec)
+                    x_sol, info = solver(A_op, -b_np, x0=node_sols[node] if node in node_sols else None, maxiter=max_iter, rtol=tol)
+                    node_sols[node] = x_sol
+                step_tensor = torch.tensor(x_sol, dtype=b_rhs.dtype, device=b_rhs.device).reshape(b_rhs.shape)
+                node.update_node(step_tensor, lr=lr)
+                self.left_update_stacks(node)
+                if block_callback is not None:
+                    block_callback(NS, node)
+                t_bar.close()
         return True

@@ -50,6 +50,8 @@ class TensorTrainWrapper:
         self.save_every = tt_params.get('save_every', 10)
         self.input_dim = input_dim
         self.output_dim = output_dim
+        if isinstance(output_dim, int) and self.task == 'classification':
+            self.output_dim = output_dim - 1
         self.output_shape = (output_dim,) if isinstance(output_dim, int) else output_dim
         if self.layer_type == 'tt':
             self.model = TensorTrainLayer(
@@ -103,8 +105,7 @@ class TensorTrainWrapper:
             bf = SquareBregFunction()
         if X_val is None and y_val is None:
             val_results = {}
-            def convergence_criterion(_, __):
-                return False  # No early stopping for now
+            convergence_criterion = None
         else:
             val_results = {
                 'best_metric': 0.0 if self.task == 'classification' else float('inf'),
