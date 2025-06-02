@@ -53,7 +53,6 @@ if __name__ == '__main__':
     parser.add_argument('--tt_method', type=str, default='exact', help='Method for tensor train')
     parser.add_argument('--tt_eps_max', type=float, default=1.0, help='Initial Epsilon for tensor train')
     parser.add_argument('--tt_eps_min', type=float, default=1e-3, help='Final Epsilon for tensor train')
-    parser.add_argument('--tt_delta', type=float, default=1.0, help='Delta for tensor train')
     parser.add_argument('--tt_CB', type=int, default=4, help='Convolution bond for tensor train')
     parser.add_argument('--tt_orthonormalize', action='store_true', help='Orthonormalize for tensor train')
     parser.add_argument('--tt_timeout', type=float, default=None, help='Timeout for tensor train')

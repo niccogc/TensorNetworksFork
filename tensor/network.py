@@ -196,11 +196,10 @@ class TensorNetwork:
         einsum_b = f"{J_ein1},{d_loss_ein}->{J_out1}"
         
         # Compute einsum operations
-        A = torch.einsum(einsum_A, J.tensor, J.tensor, hessian)
-        b = torch.einsum(einsum_b, J.tensor, grad)
+        A = torch.einsum(einsum_A, J.tensor.conj(), J.tensor, hessian)
+        b = torch.einsum(einsum_b, J.tensor.conj(), grad)
 
-        J_sum = J.permute_first(dim_order).sum_labels(broadcast_dims)
-        return A, b, J_sum.flatten()
+        return A, b
     
     def get_J(self, node, grad):
         # Determine broadcast
@@ -279,7 +278,7 @@ class TensorNetwork:
 
         return b
 
-    def solve_system(self, node, A, b, J, method='exact', eps=0.0, delta=1e2):
+    def solve_system(self, node, A, b, method='exact', eps=0.0, eps_r=0.0, D_reg=None):
         """Finds the update step for a given node"""
         # Solve the system
         A_f = A.flatten(0, A.ndim//2-1).flatten(1, -1)
@@ -292,68 +291,35 @@ class TensorNetwork:
         if method.lower() == 'exact':
             x = torch.linalg.solve(A_f, -b_f)
         elif method.lower() == 'ridge_exact':
-            A_f.add_((2 * eps) * torch.eye(A_f.shape[-1], dtype=A_f.dtype, device=A_f.device))
-            b_f.add_((2 * eps) * node.tensor.flatten())
+            ##A_f.diagonal(dim1=-2, dim2=-1).add_(2 * eps)
+            A_f = A_f + (2 * eps) * torch.eye(A_f.shape[-1], dtype=A_f.dtype, device=A_f.device)
+            b_f = b_f + (2 * eps) * node.tensor.flatten()
             x = torch.linalg.solve(A_f, -b_f)
-        elif method.lower() == 'ridge_cholesky':
-            A_f.add_((2 * eps) * torch.eye(A_f.shape[-1], dtype=A_f.dtype, device=A_f.device))
-            b_f.add_((2 * eps) * node.tensor.flatten())
+        elif method.lower().startswith('ridge_cholesky'):
+            #A_f.diagonal(dim1=-2, dim2=-1).add_(2 * eps)
+            if D_reg is not None:
+                D_reg_s = (D_reg + D_reg.T)
+                A_f = A_f + eps * D_reg_s
+                b_f = b_f + eps * (node.tensor.flatten() @ D_reg_s) + eps_r * torch.sgn(node.tensor.flatten())
+            elif "l1" in method.lower():
+                A_f = A_f + (2 * eps) * torch.eye(A_f.shape[-1], dtype=A_f.dtype, device=A_f.device)
+                b_f = b_f + (2 * eps) * node.tensor.flatten() + eps_r * torch.sgn(node.tensor.flatten())
+            elif 'huber' in method.lower():
+                mask = torch.abs(node.tensor.flatten()) < eps_r
+                delta = torch.where(mask, node.tensor.flatten(), 2*torch.sgn(node.tensor.flatten()))
+                A_f = A_f + (2 * eps) * torch.diag(mask.float())
+                b_f = b_f + eps * delta
+            else:
+                A_f = A_f + (2 * eps) * torch.eye(A_f.shape[-1], dtype=A_f.dtype, device=A_f.device)
+                b_f = b_f + (2 * eps) * node.tensor.flatten()
             L = torch.linalg.cholesky(A_f)
             x = torch.cholesky_solve(-b_f.unsqueeze(-1), L)
             x = x.squeeze(-1)
         elif method.lower() == 'cholesky':
-            A_f_reg = A_f + eps * torch.eye(A_f.shape[-1], dtype=A_f.dtype, device=A_f.device)
-            L = torch.linalg.cholesky(A_f_reg)
+            A_f = A_f + eps * torch.eye(A_f.shape[-1], dtype=A_f.dtype, device=A_f.device)
+            L = torch.linalg.cholesky(A_f)
             x = torch.cholesky_solve(-b_f.unsqueeze(-1), L)
             x = x.squeeze(-1)
-        elif method.lower().startswith('dog'):
-            # Dogleg trust-region method
-            # Steepest descent step: p_sd = - (g^T g) / (g^T A g) * g
-            p_sd = -b_f
-
-            # Gauss-Newton step: solve A p_gn = -g
-            try:
-                p_gn = torch.linalg.solve(A_f, p_sd)
-            except torch.linalg.LinAlgError:
-                # Fallback to steepest descent if singular
-                print("It was singular")
-                p_gn = p_sd
-
-            norm_p_gn = torch.norm(p_gn)
-            norm_p_sd = torch.norm(p_sd)
-            tau = (norm_p_sd ** 2) / (torch.norm(J * p_sd) ** 2)
-            t = tau * p_sd
-            norm_t = torch.norm(t)
-
-            if norm_p_gn <= delta:
-                x = p_gn
-                print("I did a gauss newton step! :D")
-            elif norm_t >= delta:
-                x = (delta / norm_p_sd) * p_sd
-                print("I did a steepest descent step! :(")
-            else:
-                d = p_gn - t
-
-                a = torch.norm(d)
-                b_coeff = 2 * torch.dot(t, d)
-                c = norm_t - delta**2
-                
-                # Solve for beta, choose the one that is between 0 and 1
-                beta_p = (-b_coeff + torch.sqrt(b_coeff**2 - 4 * a * c)) / (2 * a)
-                beta_n = (-b_coeff - torch.sqrt(b_coeff**2 - 4 * a * c)) / (2 * a)
-                if beta_p >= 0 and beta_p <= 1:
-                    beta = beta_p
-                elif beta_n >= 0 and beta_n <= 1:
-                    beta = beta_n
-                elif beta_p > 1:
-                    beta = beta_p
-                elif beta_n > 1:
-                    beta = beta_n
-                else:
-                    raise ValueError("No valid beta found in dogleg method.")
-                x = t + beta * d
-                print(f"Beta: {beta.item():.4g}, Tau: {tau.item():.4g} :)))")
-
         else:
             raise ValueError(f"Unknown method: {method}")
 
@@ -411,7 +377,7 @@ class TensorNetwork:
 
         return new_network
 
-    def accumulating_swipe(self, x, y_true, loss_fn, batch_size=-1, num_swipes=1, lr=1.0, method='exact', eps=1e-12, delta=1.0, convergence_criterion=None, orthonormalize=False, verbose=False, skip_second=False, timeout=None, data_device=None, model_device=None, disable_tqdm=None, block_callback=None, loss_callback=None, direction='l2r', update_or_reset_stack='reset'):
+    def accumulating_swipe(self, x, y_true, loss_fn, batch_size=-1, num_swipes=1, lr=1.0, method='exact', eps=1e-12, eps_r=0.0, D_reg_fn=lambda _: None, convergence_criterion=None, orthonormalize=False, verbose=False, skip_second=False, timeout=None, data_device=None, model_device=None, disable_tqdm=None, block_callback=None, loss_callback=None, direction='l2r', update_or_reset_stack='reset'):
         """Swipes the network to minimize the loss using accumulated A and b over mini-batches.
         Args:
             timeout (float or None): Maximum time in seconds to run. If None, no timeout.
@@ -444,6 +410,10 @@ class TensorNetwork:
                 eps_ = eps[NS*2]
             else:
                 eps_ = eps
+            if isinstance(eps_r, list):
+                eps_r_ = eps_r[NS*2]
+            else:
+                eps_r_ = eps_r
             # LEFT TO RIGHT
             for node_l2r in self.train_nodes if direction == 'l2r' else reversed(self.train_nodes):
                 if node_l2r in self.node_indices and node_r2l in self.node_indices and self.node_indices[node_l2r] == self.node_indices[node_r2l]:
@@ -452,7 +422,7 @@ class TensorNetwork:
                 if timeout is not None and (time.time() - start_time) > timeout:
                     print(f"Timeout reached ({timeout} seconds). Stopping accumulating_swipe.")
                     return False
-                A_out, b_out, J_out = None, None, None
+                A_out, b_out = None, None
                 total_loss = 0.0
 
                 for b in tqdm(range(batches), desc=f"Left to right pass ({node_l2r.name if hasattr(node_l2r, 'name') else 'node'})", disable=disable_tqdm):
@@ -468,26 +438,24 @@ class TensorNetwork:
                     y_pred = self.forward(x_batch).permute_first(*self.output_labels).tensor
                     loss, d_loss, sqd_loss = loss_fn.forward(y_pred, y_batch)
 
-                    A, b_vec, J = self.get_A_b(node_l2r, d_loss, sqd_loss)
+                    A, b_vec = self.get_A_b(node_l2r, d_loss, sqd_loss)
                     if A_out is None:
                         A_out = A
                         b_out = b_vec
-                        J_out = J
                     else:
                         A_out.add_(A)
                         b_out.add_(b_vec)
-                        J_out.add_(J)
 
                     total_loss += loss.mean().item()
 
                 if verbose > 1:
-                    print(f"NS: {NS}, Left loss ({node_l2r.name if hasattr(node_l2r, 'name') else 'node'}):", total_loss / batches, f" (eps: {eps_})")
+                    print(f"NS: {NS}, Left loss ({node_l2r.name if hasattr(node_l2r, 'name') else 'node'}):", total_loss / batches, f" (eps: {eps_})", f" (eps_r: {eps_r_})")
                 try:
                     # Choose exact if eps is 0
                     _method = method
                     if eps_ == 0 and method == 'ridge_exact':
                         _method = 'exact'
-                    step_tensor = self.solve_system(node_l2r, A_out, b_out, J_out, method=_method, eps=eps_, delta=delta)
+                    step_tensor = self.solve_system(node_l2r, A_out, b_out, method=_method, eps=eps_, eps_r=eps_r_, D_reg=D_reg_fn(node_l2r))
                 except torch.linalg.LinAlgError:
                     if verbose > 0:
                         print(f"Singular system for node {node_l2r.name if hasattr(node_l2r, 'name') else 'node'}")
@@ -550,7 +518,7 @@ class TensorNetwork:
                 if timeout is not None and (time.time() - start_time) > timeout:
                     print(f"Timeout reached ({timeout} seconds). Stopping accumulating_swipe.")
                     return False
-                A_out, b_out, J_out = None, None, None
+                A_out, b_out = None, None
                 total_loss = 0.0
 
                 for b in tqdm(range(batches), desc=f"Right to left pass ({node_r2l.name if hasattr(node_r2l, 'name') else 'node'})", disable=disable_tqdm):
@@ -566,26 +534,24 @@ class TensorNetwork:
                     y_pred = self.forward(x_batch).permute_first(*self.output_labels).tensor
                     loss, d_loss, sqd_loss = loss_fn.forward(y_pred, y_batch)
 
-                    A, b_vec, J = self.get_A_b(node_r2l, d_loss, sqd_loss)
+                    A, b_vec = self.get_A_b(node_r2l, d_loss, sqd_loss)
                     if A_out is None:
                         A_out = A
                         b_out = b_vec
-                        J_out = J
                     else:
                         A_out.add_(A)
                         b_out.add_(b_vec)
-                        J_out.add_(J)
 
                     total_loss += loss.mean().item()
 
                 if verbose > 1:
-                    print(f"NS: {NS}, Right loss ({node_r2l.name if hasattr(node_r2l, 'name') else 'node'}):", total_loss / batches, f" (eps: {eps_})")
+                    print(f"NS: {NS}, Right loss ({node_r2l.name if hasattr(node_r2l, 'name') else 'node'}):", total_loss / batches, f" (eps: {eps_})", f" (eps_r: {eps_r_})")
                 try:
                     # Choose exact if eps is 0
                     _method = method
                     if eps_ == 0 and method == 'ridge_exact':
                         _method = 'exact'
-                    step_tensor = self.solve_system(node_r2l, A_out, b_out, J_out, method=_method, eps=eps_, delta=delta)
+                    step_tensor = self.solve_system(node_r2l, A_out, b_out, method=_method, eps=eps_, eps_r=eps_r_, D_reg=D_reg_fn(node_r2l))
                 except torch.linalg.LinAlgError:
                     if verbose > 0:
                         print(f"Singular system for node {node_r2l.name if hasattr(node_r2l, 'name') else 'node'}")

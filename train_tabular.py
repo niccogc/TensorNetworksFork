@@ -17,6 +17,11 @@ def load_tabular_data(filename, device):
     y_val = data['y_val'].to(device)
     X_test = data['X_test'].to(device)
     y_test = data['y_test'].to(device)
+    if 'processed' in filename:
+        print("Processing data for tabular model...")
+        X_train = torch.cat((X_train, torch.ones((X_train.shape[0], 1), device=X_train.device)), dim=-1)
+        X_val = torch.cat((X_val, torch.ones((X_val.shape[0], 1), device=X_val.device)), dim=-1)
+        X_test = torch.cat((X_test, torch.ones((X_test.shape[0], 1), device=X_test.device)), dim=-1)
     return X_train, y_train, X_val, y_val, X_test, y_test
 
 def evaluate_model(model, X, y_true, task):
@@ -102,7 +107,6 @@ def train_model(args, data=None):
         'verbose': args.tt_verbose,
         'eps_min': args.tt_eps_min,
         'eps_max': args.tt_eps_max,
-        'delta': args.tt_delta,
         'orthonormalize': args.tt_orthonormalize,
         'timeout': args.tt_timeout,
         'batch_size': args.tt_batch_size,
@@ -226,7 +230,6 @@ if __name__ == '__main__':
     parser.add_argument('--tt_method', type=str, default='exact', help='Method for tensor train')
     parser.add_argument('--tt_eps_max', type=float, default=1.0, help='Initial Epsilon for tensor train')
     parser.add_argument('--tt_eps_min', type=float, default=1e-3, help='Final Epsilon for tensor train')
-    parser.add_argument('--tt_delta', type=float, default=1.0, help='Delta for tensor train')
     parser.add_argument('--tt_CB', type=int, default=4, help='Convolution bond for tensor train')
     parser.add_argument('--tt_orthonormalize', action='store_true', help='Orthonormalize for tensor train')
     parser.add_argument('--tt_timeout', type=float, default=None, help='Timeout for tensor train')

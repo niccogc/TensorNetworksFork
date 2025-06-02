@@ -51,6 +51,20 @@ class SquareBregFunction(BregFunction):
 
     def dsq(self, x):
         return torch.full_like(x, 2).unsqueeze(-1)
+
+class SquareComplexBregFunction(BregFunction):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x, y):
+        y = y.to(dtype=x.dtype, device=x.device)
+        x, y = self.transform_forward(x, y)
+
+        loss = torch.norm(x - y)
+
+        d_loss = (x - y)
+        dd_loss = torch.full_like(x, 1.0, device=x.device, dtype=x.dtype).unsqueeze(-1)
+        return loss, d_loss, dd_loss
     
 class SoftmaxSquaredLoss(torch.nn.Module):
     def __init__(self, w=1.0):

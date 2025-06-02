@@ -158,7 +158,6 @@ def main():
             method=args.method,
             lr=args.lr,
             eps=args.eps,
-            delta=args.delta,
             orthonormalize=args.orthonormalize,
             convergence_criterion=convergence_criterion,
             timeout=args.timeout,

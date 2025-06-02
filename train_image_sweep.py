@@ -170,7 +170,6 @@ def train_with_timeout(args, kernel_size, stride, padding, N, r, CB, xinp_train,
             method=args.method,
             lr=args.lr,
             eps=args.eps,
-            delta=args.eps,
             orthonormalize=args.orthonormalize,
             convergence_criterion=convergence_criterion,
             timeout=None,  # let main process handle timeout

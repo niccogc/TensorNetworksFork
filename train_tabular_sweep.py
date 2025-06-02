@@ -49,10 +49,9 @@ if __name__ == '__main__':
     parser.add_argument('--tt_method', type=str, default='exact', help='Method for tensor train')
     parser.add_argument('--tt_eps_max', type=float, default=1.0, help='Initial Epsilon for tensor train')
     parser.add_argument('--tt_eps_min', type=float, default=1e-3, help='Final Epsilon for tensor train')
-    parser.add_argument('--tt_delta', type=float, default=1.0, help='Delta for tensor train')
     parser.add_argument('--tt_CB', type=int, default=4, help='Convolution bond for tensor train')
     parser.add_argument('--tt_orthonormalize', action='store_true', help='Orthonormalize for tensor train')
-    parser.add_argument('--tt_timeout', type=float, default=0, help='Timeout for tensor train')
+    parser.add_argument('--tt_timeout', type=float, default=-1, help='Timeout for tensor train')
     parser.add_argument('--tt_batch_size', type=int, default=512, help='Batch size for tensor train')
     parser.add_argument('--tt_verbose', type=int, default=2, help='Verbosity level for tensor train')
     parser.add_argument('--tt_disable_tqdm', action='store_true', help='Disable tqdm for tensor train')
@@ -69,7 +68,7 @@ if __name__ == '__main__':
     args.tt_disable_tqdm = True
     if args.tt_save_every == 0:
         args.tt_save_every = 5
-    if args.tt_timeout == 0:
+    if args.tt_timeout == -1:
         args.timeout = 600
 
 

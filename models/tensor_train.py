@@ -24,6 +24,8 @@ class TensorTrainWrapper:
         self.layer_type = tt_params.get('layer_type', 'tt')
         self.N = tt_params.get('N', 3)
         self.r = tt_params.get('r', 3)
+        if self.N <= 3:
+            self.r = min(input_dim, self.r)
         self.num_swipes = tt_params.get('num_swipes', 1)
         self.lr = tt_params.get('lr', 1.0)
         self.method = tt_params.get('method', 'exact')
@@ -37,12 +39,13 @@ class TensorTrainWrapper:
             self.eps[-1] = 0.0
         else:
             self.eps = np.geomspace(self.eps_max, self.eps_min, num=2*self.num_swipes).tolist()
-        self.delta = tt_params.get('delta', 1.0)
         self.CB = tt_params.get('CB', -1)
         self.lin_bond = tt_params.get('lin_bond', 1)
         self.lin_dim = tt_params.get('lin_dim', 1)
         self.orthonormalize = tt_params.get('orthonormalize', False)
-        self.timeout = tt_params.get('timeout', None)
+        self.timeout = tt_params.get('timeout', -1)
+        if self.timeout is not None and self.timeout <= 0:
+            self.timeout = None
         self.batch_size = tt_params.get('batch_size', 512)
         self.disable_tqdm = tt_params.get('disable_tqdm', False)
         self.early_stopping = tt_params.get('early_stopping', 20)
@@ -52,7 +55,7 @@ class TensorTrainWrapper:
         self.output_dim = output_dim
         if isinstance(output_dim, int) and self.task == 'classification':
             self.output_dim = output_dim - 1
-        self.output_shape = (output_dim,) if isinstance(output_dim, int) else output_dim
+        self.output_shape = (self.output_dim,) if isinstance(self.output_dim, int) else self.output_dim
         if self.layer_type == 'tt':
             self.model = TensorTrainLayer(
                 num_carriages=self.N,
@@ -136,7 +139,6 @@ class TensorTrainWrapper:
                 method=self.method,
                 lr=self.lr,
                 eps=self.eps,
-                delta=self.delta,
                 orthonormalize=self.orthonormalize,
                 convergence_criterion=convergence_criterion,
                 timeout=self.timeout,
@@ -155,11 +157,20 @@ class TensorTrainWrapper:
     def predict(self, X):
         X = X.to(self.device)
         with torch.inference_mode():
-            self.model.tensor_network.reset_stacks()
-            y_pred = self.model(X)
+            data_size = X.shape[0]
+            batch_size = 64 #self.batch_size
+            if batch_size <= 0:
+                batch_size = data_size
+            batches = (data_size + batch_size - 1) // batch_size
+            y_preds = []
+            for b in range(batches):
+                x_batch = X[b*batch_size:(b+1)*batch_size]
+                self.model.tensor_network.reset_stacks()
+                y_pred = self.model(x_batch)
+                y_preds.append(y_pred)
+            y_pred = torch.cat(y_preds, dim=0)
             if self.task == 'classification':
-                if y_pred.shape[1] == 1:
-                    y_pred = torch.cat([y_pred, torch.zeros_like(y_pred)], dim=1)
+                y_pred = torch.cat([y_pred, torch.zeros_like(y_pred)], dim=1)
                 return y_pred.argmax(dim=-1).cpu().numpy()
             else:
                 return y_pred.cpu().numpy().squeeze()

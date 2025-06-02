@@ -1,5 +1,6 @@
 import torch
 import string
+import numpy as np
 from collections import defaultdict
 
 class TensorNode:
@@ -14,6 +15,12 @@ class TensorNode:
         self.left_labels = [l] if isinstance(l, str) else (l or [])
         self.right_labels = [r] if isinstance(r, str) else (r or [])
         self.name = name or ''
+        self.connections = {}
+        self.connection_priority = defaultdict(float)
+        self.contracted = set()
+
+    def reset_connections(self):
+        """Resets the connections of the node."""
         self.connections = {}
         self.connection_priority = defaultdict(float)
         self.contracted = set()
