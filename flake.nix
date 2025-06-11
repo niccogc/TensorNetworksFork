@@ -32,6 +32,8 @@
       packages = [
         (python.withPackages (p:
           with p; [
+            matplotlib
+            tqdm
             torch
             jedi-language-server
             black

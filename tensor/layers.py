@@ -60,7 +60,7 @@ class TensorNetworkLayer(nn.Module):
         return sum(p.tensor.numel() for p in self.tensor_network.train_nodes)
 
 class TensorTrainLayer(TensorNetworkLayer):
-    def __init__(self, num_carriages, bond_dim, input_features, output_shape=tuple(), ring=False, squeeze=True, constrict_bond=True):
+    def __init__(self, num_carriages, bond_dim, input_features, output_shape=tuple(), ring=False, squeeze=True, constrict_bond=True, perturb=False):
         """Initializes a TensorTrainLayer."""
         self.num_carriages = num_carriages
         self.bond_dim = bond_dim
@@ -77,6 +77,7 @@ class TensorTrainLayer(TensorNetworkLayer):
         # Create main nodes
         self.nodes = []
         self.labels = ['s']
+
         def build_left(b0, f, R, right=0):
             mx = min(R, b0*f) if constrict_bond else R
             if right != 0:
@@ -89,44 +90,92 @@ class TensorTrainLayer(TensorNetworkLayer):
                 mx = left
             return (mx, b1)
 
-        b0 = build_left(1, input_features, bond_dim)
-        bn = build_right(bond_dim, input_features, 1)
-        left_stack = [b0]
-        right_stack = [bn]
-        middle = [b0, bn]
-        for i in range(num_carriages-2):
-            b0 = left_stack[-1][1]
-            b1 = right_stack[0][0]
-            if i == num_carriages-3:
-                middle_block = (b0, b1)
-                middle = [*left_stack, middle_block, *right_stack]
-            if i % 2 == 0:
-                left_stack.append(build_left(b0, input_features, bond_dim))
+        def build_perturb(rl, f, rr):
+            if rl==rr:
+                block = torch.diag_embed(torch.ones(rr)).unsqueeze(1)
             else:
-                right_stack.insert(0, build_right(bond_dim, input_features, b1))
+                block = torch.ones(rl, rr).unsqueeze(1)
+            zeros = [torch.zeros(rl, rr).unsqueeze(1) for _ in range(f-1)]
 
-        self.ranks = middle
-        for i in range(1, num_carriages+1):
-            if i-1 < len(self.output_shape):
-                up = self.output_shape[i-1]
-                up_label = f'c{i}'
-                self.labels.append(up_label)
-            else:
-                up = 1
-                up_label = 'c'
-            down = input_features
-            left_label = 'rr' if ring and i == 1 else f'r{i}'
-            right_label = 'rr' if ring and i == num_carriages else f'r{i+1}'
+            blockf = torch.cat([block] + zeros, dim=1)
+            return blockf
 
-            left, right = self.ranks[i-1]
+        if perturb:
+            b0 = torch.randn((1, input_features, bond_dim))
+            bn = build_perturb(bond_dim, input_features, 1)
+            left_stack = [b0]
+            right_stack = [bn]
+            middle = [b0, bn]
+            for i in range(num_carriages-2):
+                
+                b0 = left_stack[-1].shape[1]
+                b1 = right_stack[0].shape[0]
+                if i == num_carriages-3:
+                    middle_block = build_perturb(b0,input_features, b1)
+                    middle = [*left_stack, middle_block, *right_stack]
+                left_stack.append(build_perturb(b0, input_features, bond_dim))
 
-            node = TensorNode((left, up, down, right), [left_label, up_label, 'p', right_label], l=left_label, r=right_label, name=f"A{i}")
-            if i > 1:
-                self.nodes[-1].connect(node, left_label, priority=1)
-            if ring and i == num_carriages:
-                node.connect(self.nodes[0], right_label, priority=0)
-            node.connect(self.x_nodes[i-1], 'p', priority=2)
-            self.nodes.append(node)
+            self.pert_nodes = middle
+
+            for i in range(1, num_carriages+1):
+                if i-1 < len(self.output_shape):
+                    up = self.output_shape[i-1]
+                    up_label = f'c{i}'
+                    self.labels.append(up_label)
+                else:
+                    up = 1
+                    up_label = 'c'
+                down = input_features
+                left_label = 'rr' if ring and i == 1 else f'r{i}'
+                right_label = 'rr' if ring and i == num_carriages else f'r{i+1}'
+
+                node = TensorNode(self.pert_nodes[i-1].unsqueeze(1), [left_label, up_label, 'p', right_label], l=left_label, r=right_label, name=f"A{i}")
+                if i > 1:
+                    self.nodes[-1].connect(node, left_label, priority=1)
+                if ring and i == num_carriages:
+                    node.connect(self.nodes[0], right_label, priority=0)
+                node.connect(self.x_nodes[i-1], 'p', priority=2)
+                print(self.pert_nodes[i-1].unsqueeze(1).shape)
+                self.nodes.append(node)
+        else:
+            b0 = build_left(1, input_features, bond_dim)
+            bn = build_right(bond_dim, input_features, 1)
+            left_stack = [b0]
+            right_stack = [bn]
+            middle = [b0, bn]
+            for i in range(num_carriages-2):
+                b0 = left_stack[-1][1]
+                b1 = right_stack[0][0]
+                if i == num_carriages-3:
+                    middle_block = (b0, b1)
+                    middle = [*left_stack, middle_block, *right_stack]
+                if i % 2 == 0:
+                    left_stack.append(build_left(b0, input_features, bond_dim))
+                else:
+                    right_stack.insert(0, build_right(bond_dim, input_features, b1))
+
+            self.ranks = middle
+            for i in range(1, num_carriages+1):
+                if i-1 < len(self.output_shape):
+                    up = self.output_shape[i-1]
+                    up_label = f'c{i}'
+                    self.labels.append(up_label)
+                else:
+                    up = 1
+                    up_label = 'c'
+                down = input_features
+                left_label = 'rr' if ring and i == 1 else f'r{i}'
+                right_label = 'rr' if ring and i == num_carriages else f'r{i+1}'
+
+                left, right = self.ranks[i-1]
+
+                node = TensorNode((left, up, down, right), [left_label, up_label, 'p', right_label], l=left_label, r=right_label, name=f"A{i}")
+                if i > 1:
+                    self.nodes[-1].connect(node, left_label, priority=1)
+                if ring and i == num_carriages:
+                    node.connect(self.nodes[0], right_label, priority=0)
+                node.connect(self.x_nodes[i-1], 'p', priority=2)
+                self.nodes.append(node)
 
         # Squeeze singleton dimensions
         if squeeze:
