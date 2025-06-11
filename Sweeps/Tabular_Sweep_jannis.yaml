@@ -1,0 +1,31 @@
+name: jannis
+method: bayes
+metric:
+  goal: maximize
+  name: val/accuracy
+parameters:
+  tt_N:
+    min: 3
+    max: 6
+  tt_r:
+    min: 2
+    max: 40
+  tt_layer_type:
+    values: [tt, operator, linear]
+  tt_num_swipes:
+    min: 1
+    max: 10
+  tt_eps_max:
+    distribution: log_uniform_values
+    min: 1e-2
+    max: 5e1
+  tt_eps_min:
+    distribution: log_uniform_values
+    min: 1e-5
+    max: 0.5
+  tt_lin_dim:
+    min: 0.0
+    max: 1.0
+  tt_lin_bond:
+    min: 0
+    max: 12
