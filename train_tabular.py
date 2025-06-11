@@ -4,6 +4,7 @@ import torch
 from models.xgboost import XGBRegWrapper, XGBClfWrapper
 from models.svm import SVMRegWrapper, SVMClfWrapper
 from models.mlp import MLPWrapper
+from models.polynomial_regression import PolynomialRegressionWrapper
 from models.tensor_train import TensorTrainWrapper
 from sklearn.metrics import accuracy_score, mean_squared_error
 import numpy as np
@@ -24,18 +25,25 @@ def load_tabular_data(filename, device):
         X_test = torch.cat((X_test, torch.ones((X_test.shape[0], 1), device=X_test.device)), dim=-1)
     return X_train, y_train, X_val, y_val, X_test, y_test
 
-def evaluate_model(model, X, y_true, task):
+def evaluate_model(model, X, y_true, metric='accuracy'):
     y_pred = model.predict(X)
-    if task == 'classification':
+    if metric == 'accuracy':
         if y_true.ndim == 2:
             y_true = y_true.argmax(-1)
         acc = accuracy_score(y_true.cpu().numpy(), y_pred)
         return acc
-    else:
+    elif metric == 'rmse':
         if y_true.ndim == 2:
             y_true = y_true.squeeze(-1)
         rmse = np.sqrt(mean_squared_error(y_true.cpu().numpy(), y_pred))
         return rmse
+    elif metric == 'r2':
+        if y_true.ndim == 2:
+            y_true = y_true.squeeze(-1)
+        r2 = 1 - (np.sum((y_true.cpu().numpy() - y_pred) ** 2) / np.sum((y_true.cpu().numpy() - np.mean(y_true.cpu().numpy())) ** 2))
+        return r2
+    else:
+        raise ValueError(f"Unknown metric: {metric}")
 
 def train_model(args, data=None):
     args.version = '05-05-25v3'
@@ -116,6 +124,13 @@ def train_model(args, data=None):
         'save_every': args.tt_save_every,
     }
 
+    # Add polynomial regression parameters
+    poly_params = {
+        'degree': args.poly_degree,
+        'regularization': args.poly_regularization,
+        'alpha': args.poly_alpha,
+    }
+
     # If choosing SVM and the sample size is larger than 1000000, skip
     if args.model_type == 'svm' and X_train.shape[0] > 10000:
         print(f"Skipping SVM training for {args.dataset_name} due to large sample size.")
@@ -164,13 +179,21 @@ def train_model(args, data=None):
         converged = model.fit(X_train, y_train, X_val if args.tt_track_eval else None, y_val if args.tt_track_eval else None)
         if wandb_enabled:
             wandb.log({'singular': not converged})
+    elif args.model_type == 'polynomial':
+        model = PolynomialRegressionWrapper(
+            degree=poly_params['degree'],
+            regularization=poly_params['regularization'],
+            alpha=poly_params['alpha']
+        )
+        model.fit(X_train, y_train)
     else:
         raise ValueError(f"Unknown model_type: {args.model_type}")
-    if args.model_type != 'tensor':
+    if args.model_type != 'tensor' and args.model_type != 'polynomial':
         model.fit(X_train, y_train)
     # Unified evaluation
-    val_score = evaluate_model(model, X_val, y_val, args.task)
-    test_score = evaluate_model(model, X_test, y_test, args.task)
+    metric = 'accuracy' if args.task == 'classification' else 'rmse'
+    val_score = evaluate_model(model, X_val, y_val, metric)
+    test_score = evaluate_model(model, X_test, y_test, metric)
     if args.task == 'classification':
         print('Validation Accuracy:', val_score)
         print('Test Accuracy:', test_score)
@@ -179,8 +202,13 @@ def train_model(args, data=None):
     else:
         print('Validation RMSE:', val_score)
         print('Test RMSE:', test_score)
+        # Calculate R2 score as well
+        r2_val = evaluate_model(model, X_val, y_val, metric='r2')
+        r2_test = evaluate_model(model, X_test, y_test, metric='r2')
+        print('Validation R2:', r2_val)
+        print('Test R2:', r2_test)
         if wandb_enabled:
-            wandb.log({'val/rmse': val_score, 'test/rmse': test_score})
+            wandb.log({'val/rmse': val_score, 'test/rmse': test_score, 'val/r2': r2_val, 'test/r2': r2_test})
     if wandb_enabled:
         wandb.finish()
         wandb.teardown()
@@ -196,7 +224,7 @@ if __name__ == '__main__':
     parser.add_argument('--wandb_project', type=str, default=None, help='WandB project name')
     parser.add_argument('--wandb_entity', type=str, default=None, help='WandB entity name')
     parser.add_argument('--disable_tqdm', action='store_true', help='Disable tqdm progress bars regardless of verbosity')
-    parser.add_argument('--model_type', type=str, choices=['tensor', 'xgboost', 'svm', 'mlp'], default='tensor', help='Model type: tensor (TensorTrain/Operator), xgboost, svm, or mlp')
+    parser.add_argument('--model_type', type=str, choices=['tensor', 'xgboost', 'svm', 'mlp', 'polynomial'], default='tensor', help='Model type: tensor (TensorTrain/Operator), xgboost, svm, mlp, or polynomial')
 
     # XGBoost hyperparameters
     parser.add_argument('--xgb_n_estimators', type=int, default=300, help='Number of boosting rounds for XGBoost')
@@ -241,6 +269,11 @@ if __name__ == '__main__':
     parser.add_argument('--tt_early_stopping', type=int, default=0, help='Early stopping patience for tensor train')
     parser.add_argument('--tt_track_eval', action='store_true', help='Track evaluation during training for tensor train')
     parser.add_argument('--tt_save_every', type=int, default=10, help='Save model every N epochs for tensor train')
+
+    # Polynomial Regression hyperparameters
+    parser.add_argument('--poly_degree', type=int, default=2, help='Degree of polynomial features')
+    parser.add_argument('--poly_regularization', type=str, choices=['l1', 'l2', None], default=None, help='Regularization type for polynomial regression')
+    parser.add_argument('--poly_alpha', type=float, default=1.0, help='Regularization strength for polynomial regression')
 
     args = parser.parse_args()
     train_model(args)  # loads data inside main by default
