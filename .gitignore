@@ -178,3 +178,11 @@ cython_debug/
 /wandb
 *.sh
 *.out
+Data/raw/HIGGS.csv.gz
+Data/data/higgs_tensor.pt
+Data/data
+Data/data
+Data/raw/WEC
+Data/raw/WEC
+Data/data
+Data.zip
