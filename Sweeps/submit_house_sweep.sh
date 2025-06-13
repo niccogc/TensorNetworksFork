@@ -1,5 +1,5 @@
 #!/bin/sh
-#BSUB -q gpuv100
+#BSUB -q gpua100
 #BSUB -J house
 #BSUB -W 4:00
 #BSUB -n 8
@@ -15,4 +15,4 @@ source "/zhome/22/c/137477/miniforge3/etc/profile.d/conda.sh"
 conda activate s183995
 nvidia-smi
 export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:2048
-python train_tabular_sweep.py --sweep_id hs5zq8gj --data_dir /work3/s183995/Tabular/data/processed --dataset_name house --wandb_project Tabular --wandb_entity tensorGang --task regression --tt_method ridge_cholesky --tt_track_eval
+python train_tabular_sweep.py --sweep_id n1fzhjvy --data_dir /work3/s183995/Tabular/data/processed --dataset_name house --wandb_project tabular3 --wandb_entity tensorGang --task regression --tt_method ridge_cholesky --tt_track_eval

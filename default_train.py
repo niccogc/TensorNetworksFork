@@ -22,8 +22,31 @@ def load_tabular_data(filename, device):
 x_train, y_train, x_val, y_val, x_test, y_test = load_tabular_data('/work3/s183995/Tabular/data/processed/house_tensor.pt', device='cuda')
 
 x_train = torch.tensor(x_train, device='cuda')
+x_std, x_mean = torch.std_mean(x_train, dim=0, unbiased=False, keepdim=True)
+x_train = (x_train - x_mean) / x_std
+x_test = (x_test - x_mean) / x_std
+x_val = (x_val - x_mean) / x_std
+
+x_min, x_max = x_train.amin(dim=0, keepdim=True), x_train.amax(dim=0, keepdim=True)
 x_test = torch.tensor(x_test, device='cuda')
 x_val = torch.tensor(x_val, device='cuda')
+
+eps_val = 1e-2
+
+x_test_mask = ((x_min <= x_test) & (x_test <= x_max)).all(-1)
+x_val_mask = ((x_min <= x_val) & (x_val <= x_max)).all(-1)
+
+# Mask out
+# print(x_test.shape, x_val.shape)
+# x_test = x_test[x_test_mask]
+# x_val = x_val[x_val_mask]
+# y_test = y_test[x_test_mask]
+# y_val = y_val[x_val_mask]
+# print(x_test.shape, x_val.shape)
+
+# Clamp to min/max
+x_test = torch.clamp(x_test, x_min, x_max)
+x_val = torch.clamp(x_val, x_min, x_max)
 
 x_train = torch.cat((x_train, torch.ones((x_train.shape[0], 1), device=x_train.device)), dim=-1).to(dtype=torch.float64, device='cuda')
 x_test = torch.cat((x_test, torch.ones((x_test.shape[0], 1), device=x_test.device)), dim=-1).to(dtype=torch.float64, device='cuda')
@@ -39,17 +62,51 @@ if y_val.ndim == 1:
     y_val = y_val.unsqueeze(1)
 y_val = y_val.to(dtype=torch.float64, device='cuda')
 #%%
-N = 5
-r = 12
+import matplotlib.pyplot as plt
+
+# Store all predictions for cumulative plotting
+all_predictions = []
+
+def plot_data(y_pred):
+    # Add new prediction to our collection
+    all_predictions.append(y_pred.cpu().numpy())
+    
+    # Create a fresh figure with all data
+    fig, ax = plt.subplots(figsize=(6, 6))
+    
+    # Plot all previous predictions with color progression
+    for i, pred in enumerate(all_predictions):
+        # Color progression from early (red/orange) to recent (blue/purple)
+        color_ratio = i / max(1, len(all_predictions) - 1)  # Avoid division by zero
+        color = plt.cm.plasma(color_ratio)  # Use plasma colormap for nice progression
+        
+        # Alpha progression - more recent predictions are more opaque
+        alpha = 0.3 + 0.7 * (i + 1) / len(all_predictions)
+        
+        ax.scatter(x_val[:,0].cpu().numpy(), pred[:,0], 
+                  color=color, alpha=alpha, s=20, marker='o', 
+                  zorder=2, label=f'Step {i+1}' if i == len(all_predictions)-1 else None)
+    
+    ax.scatter(x_train[:,0].cpu().numpy(), y_train[:,0].cpu().numpy(), 
+              s=90, alpha=0.5, marker='*', color='black', zorder=1, label='Training Data')
+    
+    ax.set_xlabel('Input')
+    ax.set_ylabel('Output')
+    ax.set_title(f'Data - Training Progress (Step {len(all_predictions)})')
+    ax.grid()
+    ax.legend()
+    plt.show()
+    plt.close()  # Close the figure to free memory
+#%%
+N = 2
+r = 2
 NUM_SWIPES = 5
 method = 'ridge_cholesky'
-epss = np.geomspace(0.02206915991899018, 0.000317837364967951, NUM_SWIPES*2).tolist()
+epss = np.geomspace(1e-12, 1e-10, 2*NUM_SWIPES).tolist()
 # Define Bregman function
 bf = SquareBregFunction()
-torch.manual_seed(42)
-torch.cuda.manual_seed(42)
-np.random.seed(42)
-layer = TensorTrainLayer(N, r, x_train.shape[1], output_shape=1, constrict_bond=True).cuda()
+layer = TensorTrainLayer(N, r, x_train.shape[1], output_shape=1, constrict_bond=True, perturb=True, seed=42).cuda()
+#%%
 train_loss_dict = {}
 val_loss_dict = {}
 def convergence_criterion(_, __):
@@ -60,47 +117,17 @@ def convergence_criterion(_, __):
     y_pred_val = layer(x_val)
     rmse = torch.sqrt(torch.mean((y_pred_val - y_val)**2))
     print('Val RMSE:', rmse.item())
-    return False
 
+    r2 = 1 - torch.sum((y_pred_val - y_val)**2) / torch.sum((y_val - y_val.mean())**2)
+    print('Val R2:', r2.item())
+    #plot_data(y_pred_val)
+    return False
+#for num_swipes in range(NUM_SWIPES):
+    #layer.tensor_network.train_nodes[-num_swipes-1:(-num_swipes) if num_swipes > 0 else None]
+    #torch.nn.init.trunc_normal_(layer.tensor_network.train_nodes[num_swipes].tensor, mean=0.0, std=0.02, a=-0.04, b=0.04)
+    #layer.tensor_network.accumulating_swipe(x_train, y_train, bf, node_order=layer.tensor_network.train_nodes[num_swipes:num_swipes+1], batch_size=512, lr=1.0, eps=epss[num_swipes], eps_r=0.5, convergence_criterion=convergence_criterion, orthonormalize=False, method=method, verbose=2, num_swipes=1, skip_second=True, direction='l2r', disable_tqdm=True)
 layer.tensor_network.accumulating_swipe(x_train, y_train, bf, batch_size=512, lr=1.0, eps=epss, eps_r=0.5, convergence_criterion=convergence_criterion, orthonormalize=False, method=method, verbose=2, num_swipes=NUM_SWIPES, skip_second=False, direction='l2r', disable_tqdm=True)
 convergence_criterion(None, None)
 print("Train:",(y_train.real - layer(x_train).real).square().mean().sqrt())
 print("Val:",(y_val.real - layer(x_val).real).square().mean().sqrt())
 #%%
-y_train_pred = layer(x_train).cpu().numpy()
-y_val_pred = layer(x_val).cpu().numpy()
-y_test_pred = layer(x_test).cpu().numpy()
-import matplotlib.pyplot as plt
-plt.figure(figsize=(10, 6))
-plt.scatter(y_train.cpu().numpy(), y_train_pred, label='Train', alpha=0.5)
-plt.scatter(y_val.cpu().numpy(), y_val_pred, label='Validation', alpha=0.5)
-plt.scatter(y_test.cpu().numpy(), y_test_pred, label='Test', alpha=0.5)
-plt.plot([y_train.amin().item(), y_train.amax().item()], [y_train.amin().item(), y_train.amax().item()], 'k--', lw=2)
-plt.xlabel('True Values')
-plt.ylabel('Predictions')
-plt.title('Ridge Regression Predictions')
-plt.legend()
-plt.show()
-#%%
-# Convert to pandas DataFrame
-import pandas as pd
-train_df = pd.DataFrame(x_train.cpu().numpy(), columns=[f'feature_{i}' for i in range(x_train.shape[1])])
-train_df['target'] = y_train.cpu().numpy()
-train_df['split'] = 'train'
-
-val_df = pd.DataFrame(x_val.cpu().numpy(), columns=[f'feature_{i}' for i in range(x_val.shape[1])])
-val_df['target'] = y_val.cpu().numpy()
-val_df['split'] = 'val'
-
-test_df = pd.DataFrame(x_test.cpu().numpy(), columns=[f'feature_{i}' for i in range(x_test.shape[1])])
-test_df['target'] = y_test.cpu().numpy()
-test_df['split'] = 'test'
-
-all_df = pd.concat([train_df, val_df, test_df], ignore_index=True)
-# Visualize as a grid scatter plot using seaborn
-import seaborn as sns
-import matplotlib.pyplot as plt
-sns.set(style="whitegrid")
-plt.figure(figsize=(12, 8))
-sns.pairplot(all_df, diag_kind='kde', markers='o', plot_kws={'alpha': 0.5}, hue='split')
-# %%

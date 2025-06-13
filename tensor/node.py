@@ -173,7 +173,7 @@ class TensorNode:
         node = TensorNode(self.tensor, self.dim_labels.copy(), l=self.left_labels.copy(), r=self.right_labels.copy(), name=self.name)
         return node
 
-    def update_node(self, step, lr=1.0, adaptive_step=False, max_norm=None):
+    def update_node(self, step, lr=1.0, adaptive_step=False, min_norm=None, max_norm=None):
         """Updates the tensor of the node with the given step size."""
         if adaptive_step:
             # Compute update norm for adaptive step size
@@ -186,13 +186,17 @@ class TensorNode:
         
         # Apply update with learning rate
         new_tensor = self.tensor + lr * step
-        
+        # if min_norm is not None:
+        #     if torch.norm(step) < min_norm:
+        #         return self
         if max_norm is not None:
             # Project updates to maintain numerical stability
             current_norm = torch.norm(new_tensor)
             if current_norm > max_norm:
                 new_tensor = new_tensor * (max_norm / current_norm)
-            
+
+
+        #print('step:', torch.norm(step), 'new:', torch.norm(new_tensor), 'old:', torch.norm(self.tensor))
         self.tensor = new_tensor
         return self
 

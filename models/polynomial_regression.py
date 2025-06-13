@@ -20,6 +20,7 @@ class PolynomialRegressionWrapper:
         y = y.cpu().numpy()
         if self.model:
             self.model.fit(X_poly, y)
+            self.coefficients = self.model.coef_
         else:
             self.coefficients = np.linalg.pinv(X_poly.T @ X_poly) @ X_poly.T @ y
 

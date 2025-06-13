@@ -60,7 +60,7 @@ class TensorNetworkLayer(nn.Module):
         return sum(p.tensor.numel() for p in self.tensor_network.train_nodes)
 
 class TensorTrainLayer(TensorNetworkLayer):
-    def __init__(self, num_carriages, bond_dim, input_features, output_shape=tuple(), ring=False, squeeze=True, constrict_bond=True, perturb=False):
+    def __init__(self, num_carriages, bond_dim, input_features, output_shape=tuple(), ring=False, squeeze=True, constrict_bond=True, perturb=False, seed=None):
         """Initializes a TensorTrainLayer."""
         self.num_carriages = num_carriages
         self.bond_dim = bond_dim
@@ -68,12 +68,17 @@ class TensorTrainLayer(TensorNetworkLayer):
         self.output_shape = output_shape if isinstance(output_shape, tuple) else (output_shape,)
         self.ring = ring
 
+        if seed is not None:
+            torch.manual_seed(seed)
+            torch.cuda.manual_seed(seed)
+        
         # Create input nodes
         self.x_nodes = []
         for i in range(1, num_carriages+1):
-            x_node = TensorNode((1, input_features), ['s', 'p'], name=f"X{i}")
+            x_node = TensorNode(torch.empty((1, input_features)), ['s', 'p'], name=f"X{i}")
             self.x_nodes.append(x_node)
 
+        
         # Create main nodes
         self.nodes = []
         self.labels = ['s']
@@ -95,23 +100,22 @@ class TensorTrainLayer(TensorNetworkLayer):
                 block = torch.diag_embed(torch.ones(rr)).unsqueeze(1)
             else:
                 block = torch.ones(rl, rr).unsqueeze(1)
-            zeros = [torch.zeros(rl, rr).unsqueeze(1) for _ in range(f-1)]
 
-            blockf = torch.cat([block] + zeros, dim=1)
+            blockf = torch.cat((torch.zeros(rl, f-1, rr), block), dim=1)
             return blockf
 
         if perturb:
-            b0 = torch.randn((1, input_features, bond_dim))
+            b0 = build_perturb(1, input_features, bond_dim)#torch.randn((1, input_features, bond_dim))
             bn = build_perturb(bond_dim, input_features, 1)
             left_stack = [b0]
             right_stack = [bn]
             middle = [b0, bn]
             for i in range(num_carriages-2):
                 
-                b0 = left_stack[-1].shape[1]
+                b0 = left_stack[-1].shape[-1]
                 b1 = right_stack[0].shape[0]
                 if i == num_carriages-3:
-                    middle_block = build_perturb(b0,input_features, b1)
+                    middle_block = build_perturb(b0, input_features, b1)
                     middle = [*left_stack, middle_block, *right_stack]
                 left_stack.append(build_perturb(b0, input_features, bond_dim))
 
@@ -135,7 +139,6 @@ class TensorTrainLayer(TensorNetworkLayer):
                 if ring and i == num_carriages:
                     node.connect(self.nodes[0], right_label, priority=0)
                 node.connect(self.x_nodes[i-1], 'p', priority=2)
-                print(self.pert_nodes[i-1].unsqueeze(1).shape)
                 self.nodes.append(node)
         else:
             b0 = build_left(1, input_features, bond_dim)
@@ -184,6 +187,7 @@ class TensorTrainLayer(TensorNetworkLayer):
         # Create a TensorNetwork
         tensor_network = TensorNetwork(self.x_nodes, self.nodes, output_labels=self.labels)
         super(TensorTrainLayer, self).__init__(tensor_network)
+
 
     def grow_cart(self, eps=1e-6):
         x_node_new = TensorNode(
