@@ -1,10 +1,12 @@
 #%%
+import sys, traceback
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import torch
 import numpy as np
 from tensor.bregman import SquareBregFunction
-from tensor.layers import TensorTrainLayer
+from tensor.layers import CompressedTensorTrainLayer
+from tensor.data_compression import DataCompression
 from tqdm.auto import tqdm
 from sklearn.preprocessing import MinMaxScaler
 torch.set_default_dtype(torch.float64)
@@ -19,7 +21,7 @@ def load_tabular_data(filename, device):
     y_test = data['y_test'].to(device)
     return x_train, y_train, x_val, y_val, x_test, y_test
 
-x_train, y_train, x_val, y_val, x_test, y_test = load_tabular_data('/work3/s183995/Tabular/data/processed/house_tensor.pt', device='cuda')
+x_train, y_train, x_val, y_val, x_test, y_test = load_tabular_data('/work3/s183995/Tabular/data/processed/year_tensor.pt', device='cuda')
 
 x_train = torch.tensor(x_train, device='cuda')
 x_std, x_mean = torch.std_mean(x_train, dim=0, unbiased=False, keepdim=True)
@@ -61,6 +63,19 @@ y_test = y_test.to(dtype=torch.float64, device='cuda')
 if y_val.ndim == 1:
     y_val = y_val.unsqueeze(1)
 y_val = y_val.to(dtype=torch.float64, device='cuda')
+
+degree = 2
+rank = 50
+cut_off = 1e-2
+batch_size = 1024
+
+# Create a Compressed Tensor Train Layer
+data_compression = DataCompression(x_train, device='cuda', full_svd=False)
+blocks = data_compression.feature_compress(batch_size, degree, feature_dim=(13,7), rank=rank, cut_off=cut_off)
+#%%
+val_data_compression = DataCompression(x_val, device='cuda')
+#val_blocks = val_data_compression.non_compressed(degree=3)
+val_blocks = val_data_compression.feature_compress(batch_size, degree, feature_dim=(13,7), rank=rank, cut_off=cut_off)
 #%%
 import matplotlib.pyplot as plt
 
@@ -98,23 +113,27 @@ def plot_data(y_pred):
     plt.show()
     plt.close()  # Close the figure to free memory
 #%%
-N = 2
-r = 2
-NUM_SWIPES = 5
+r = 4
 method = 'ridge_cholesky'
-epss = np.geomspace(1e-12, 1e-10, 2*NUM_SWIPES).tolist()
+epss = 1e-12#np.geomspace(1e-12, 1e-10, 2*NUM_SWIPES).tolist()
 # Define Bregman function
 bf = SquareBregFunction()
-layer = TensorTrainLayer(N, r, x_train.shape[1], output_shape=1, constrict_bond=True, perturb=True, seed=42).cuda()
+layer = CompressedTensorTrainLayer(data_compression.blocks, bond_dim=r, output_shape=(1,), constrict_bond=True, perturb=True, seed=42).cuda()
+#%%
+from tensor.utils import visualize_tensornetwork
+
+visualize_tensornetwork(layer.tensor_network)
 #%%
 train_loss_dict = {}
 val_loss_dict = {}
 def convergence_criterion():
-    y_pred_train = layer(x_train)
+    y_pred_train = layer([b.squeeze() for b in data_compression.blocks])
     rmse = torch.sqrt(torch.mean((y_pred_train - y_train)**2))
     print('Train RMSE:', rmse.item())
+    r2 = 1 - torch.sum((y_pred_train - y_train)**2) / torch.sum((y_train - y_train.mean())**2)
+    print('Train R2:', r2.item())
     
-    y_pred_val = layer(x_val)
+    y_pred_val = layer([b.squeeze() for b in val_data_compression.blocks])
     rmse = torch.sqrt(torch.mean((y_pred_val - y_val)**2))
     print('Val RMSE:', rmse.item())
 
@@ -122,12 +141,11 @@ def convergence_criterion():
     print('Val R2:', r2.item())
     #plot_data(y_pred_val)
     return False
-#for num_swipes in range(NUM_SWIPES):
-    #layer.tensor_network.train_nodes[-num_swipes-1:(-num_swipes) if num_swipes > 0 else None]
-    #torch.nn.init.trunc_normal_(layer.tensor_network.train_nodes[num_swipes].tensor, mean=0.0, std=0.02, a=-0.04, b=0.04)
-    #layer.tensor_network.accumulating_swipe(x_train, y_train, bf, node_order=layer.tensor_network.train_nodes[num_swipes:num_swipes+1], batch_size=512, lr=1.0, eps=epss[num_swipes], eps_r=0.5, convergence_criterion=convergence_criterion, orthonormalize=False, method=method, verbose=2, num_swipes=1, skip_second=True, direction='l2r', disable_tqdm=True)
-layer.tensor_network.accumulating_swipe(x_train, y_train, bf, batch_size=512, lr=1.0, eps=epss, eps_r=0.5, convergence_criterion=convergence_criterion, orthonormalize=False, method=method, verbose=2, num_swipes=NUM_SWIPES, skip_second=False, direction='l2r', disable_tqdm=True)
-convergence_criterion(None, None)
-print("Train:",(y_train.real - layer(x_train).real).square().mean().sqrt())
-print("Val:",(y_val.real - layer(x_val).real).square().mean().sqrt())
+# N = len(layer.tensor_network.train_nodes)
+# for n in range(N):
+#     torch.nn.init.trunc_normal_(layer.tensor_network.train_nodes[n].tensor, mean=0.0, std=0.02, a=-0.04, b=0.04)
+#     layer.tensor_network.accumulating_swipe([b.squeeze() for b in data_compression.blocks], y_train, bf, node_order=[layer.tensor_network.train_nodes[n]], batch_size=-1, blocks_input=True, lr=1.0, eps=epss, eps_r=0.5, convergence_criterion=convergence_criterion, orthonormalize=False, method=method, verbose=2, num_swipes=1, skip_second=True, direction='l2r', disable_tqdm=True)
+layer.tensor_network.accumulating_swipe([b.squeeze() for b in data_compression.blocks], y_train, bf, batch_size=-1, blocks_input=True, lr=1.0, eps=epss, eps_r=0.5, convergence_criterion=convergence_criterion, orthonormalize=False, method=method, verbose=2, num_swipes=5, skip_second=False, direction='l2r', disable_tqdm=True)
+#%%
+convergence_criterion()
 #%%

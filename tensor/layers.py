@@ -1257,11 +1257,14 @@ class CompressedTensorTrainLayer(TensorNetworkLayer):
         
         # Create input nodes
         self.x_nodes = []
+        self.physical_dims = []
         for i in range(1, N+1):
-            x_node = TensorNode(data_blocks[i-1], [f'r{i}', 'p', 's', f'r{i+1}'], name=f"X{i}")
+            x_node = TensorNode(data_blocks[i-1], [f'k{i}', f'p{i}', 'd', f'k{i+1}' if i < N else 's'], name=f"X{i}", l=f'k{i}', r=f'k{i+1}' if i < N else None)
+
             if self.x_nodes:
-                self.x_nodes[-1].connect(x_node, f'r{i}', priority=1)
+                x_node.connect(self.x_nodes[-1], f'k{i}', priority=1)
             self.x_nodes.append(x_node)
+            self.physical_dims.append(data_blocks[i-1].shape[1])
         
         # Create main nodes
         self.nodes = []
@@ -1289,8 +1292,8 @@ class CompressedTensorTrainLayer(TensorNetworkLayer):
             return blockf
 
         if perturb:
-            b0 = build_perturb(1, self.input_features, bond_dim)#torch.randn((1, self.input_features, bond_dim))
-            bn = build_perturb(bond_dim, self.input_features, 1)
+            b0 = build_perturb(1, self.physical_dims[0], bond_dim)#torch.randn((1, self.input_features, bond_dim))
+            bn = build_perturb(bond_dim, self.physical_dims[-1], 1)
             left_stack = [b0]
             right_stack = [bn]
             middle = [b0, bn]
@@ -1299,9 +1302,9 @@ class CompressedTensorTrainLayer(TensorNetworkLayer):
                 b0 = left_stack[-1].shape[-1]
                 b1 = right_stack[0].shape[0]
                 if i == N-3:
-                    middle_block = build_perturb(b0, self.input_features, b1)
+                    middle_block = build_perturb(b0, self.physical_dims[i+1], b1)
                     middle = [*left_stack, middle_block, *right_stack]
-                left_stack.append(build_perturb(b0, self.input_features, bond_dim))
+                left_stack.append(build_perturb(b0, self.physical_dims[i+1], bond_dim))
 
             self.pert_nodes = middle
 
@@ -1313,18 +1316,17 @@ class CompressedTensorTrainLayer(TensorNetworkLayer):
                 else:
                     up = 1
                     up_label = 'c'
-                down = self.input_features
                 left_label = f'r{i}'
                 right_label = f'r{i+1}'
 
-                node = TensorNode(self.pert_nodes[i-1].unsqueeze(1), [left_label, up_label, 'p', right_label], l=left_label, r=right_label, name=f"A{i}")
+                node = TensorNode(self.pert_nodes[i-1].unsqueeze(1), [left_label, up_label, f'p{i}', right_label], l=left_label, r=right_label, name=f"A{i}")
                 if i > 1:
                     self.nodes[-1].connect(node, left_label, priority=1)
-                node.connect(self.x_nodes[i-1], 'p', priority=2)
+                node.connect(self.x_nodes[i-1], f'p{i}', priority=2)
                 self.nodes.append(node)
         else:
-            b0 = build_left(1, self.input_features, bond_dim)
-            bn = build_right(bond_dim, self.input_features, 1)
+            b0 = build_left(1, self.physical_dims[0], bond_dim)
+            bn = build_right(bond_dim, self.physical_dims[-1], 1)
             left_stack = [b0]
             right_stack = [bn]
             middle = [b0, bn]
@@ -1335,9 +1337,9 @@ class CompressedTensorTrainLayer(TensorNetworkLayer):
                     middle_block = (b0, b1)
                     middle = [*left_stack, middle_block, *right_stack]
                 if i % 2 == 0:
-                    left_stack.append(build_left(b0, self.input_features, bond_dim))
+                    left_stack.append(build_left(b0, self.physical_dims[i+1], bond_dim))
                 else:
-                    right_stack.insert(0, build_right(bond_dim, self.input_features, b1))
+                    right_stack.insert(0, build_right(bond_dim, self.physical_dims[i+1], b1))
 
             self.ranks = middle
             for i in range(1, N+1):
@@ -1348,21 +1350,23 @@ class CompressedTensorTrainLayer(TensorNetworkLayer):
                 else:
                     up = 1
                     up_label = 'c'
-                down = self.input_features
+                down = self.physical_dims[i-1]
                 left_label = f'r{i}'
                 right_label = f'r{i+1}'
 
                 left, right = self.ranks[i-1]
 
-                node = TensorNode((left, up, down, right), [left_label, up_label, 'p', right_label], l=left_label, r=right_label, name=f"A{i}")
+                node = TensorNode((left, up, down, right), [left_label, up_label, f'p{i}', right_label], l=left_label, r=right_label, name=f"A{i}")
                 if i > 1:
                     self.nodes[-1].connect(node, left_label, priority=1)
-                node.connect(self.x_nodes[i-1], 'p', priority=2)
+                node.connect(self.x_nodes[i-1], f'p{i}', priority=2)
                 self.nodes.append(node)
 
         # Squeeze singleton dimensions
         for node in self.nodes:
             node.squeeze(self.labels)
+        for x_node in self.x_nodes:
+            x_node.squeeze(('s',))
         # Create a TensorNetwork
         tensor_network = TensorNetwork(self.x_nodes, self.nodes, output_labels=self.labels)
-        super(TensorTrainLayer, self).__init__(tensor_network)
+        super(CompressedTensorTrainLayer, self).__init__(tensor_network)
