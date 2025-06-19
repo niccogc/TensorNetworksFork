@@ -312,6 +312,7 @@ class TensorNetwork:
             else:
                 A_f = A_f + (2 * eps) * torch.eye(A_f.shape[-1], dtype=A_f.dtype, device=A_f.device)
                 b_f = b_f + (2 * eps) * node.tensor.flatten()
+                
             L = torch.linalg.cholesky(A_f)
             x = torch.cholesky_solve(-b_f.unsqueeze(-1), L)
             x = x.squeeze(-1)
@@ -377,7 +378,7 @@ class TensorNetwork:
 
         return new_network
 
-    def accumulating_swipe(self, x, y_true, loss_fn, batch_size=-1, num_swipes=1, lr=1.0, method='exact', eps=1e-12, eps_r=0.0, D_reg_fn=lambda _: None, convergence_criterion=None, orthonormalize=False, verbose=False, skip_second=False, timeout=None, data_device=None, model_device=None, disable_tqdm=None, block_callback=None, loss_callback=None, direction='l2r', update_or_reset_stack='reset'):
+    def accumulating_swipe(self, x, y_true, loss_fn, node_order=None, batch_size=-1, num_swipes=1, lr=1.0, method='exact', eps=1e-12, eps_r=0.0, D_reg_fn=lambda _: None, convergence_criterion=None, orthonormalize=False, verbose=False, skip_second=False, timeout=None, data_device=None, model_device=None, disable_tqdm=None, block_callback=None, loss_callback=None, direction='l2r', update_or_reset_stack='reset', adaptive_step=False, min_norm=None, max_norm=None):
         """Swipes the network to minimize the loss using accumulated A and b over mini-batches.
         Args:
             timeout (float or None): Maximum time in seconds to run. If None, no timeout.
@@ -405,17 +406,26 @@ class TensorNetwork:
         if disable_tqdm is None:
             disable_tqdm = verbose < 2
 
-        for NS in range(num_swipes):
+        NS = 0
+        for _ in range(num_swipes):
             if isinstance(eps, list):
-                eps_ = eps[NS*2]
+                eps_ = eps[NS]
             else:
                 eps_ = eps
             if isinstance(eps_r, list):
-                eps_r_ = eps_r[NS*2]
+                eps_r_ = eps_r[NS]
             else:
                 eps_r_ = eps_r
             # LEFT TO RIGHT
-            for node_l2r in self.train_nodes if direction == 'l2r' else reversed(self.train_nodes):
+            if node_order is not None:
+                if isinstance(node_order, tuple):
+                    first_node_order = node_order[0]
+                else:
+                    first_node_order = node_order
+            else:
+                first_node_order = self.train_nodes
+            first_node_order = first_node_order if direction == 'l2r' else reversed(first_node_order)
+            for node_l2r in first_node_order:
                 if node_l2r in self.node_indices and node_r2l in self.node_indices and self.node_indices[node_l2r] == self.node_indices[node_r2l]:
                     continue
                 # Timeout check
@@ -461,7 +471,7 @@ class TensorNetwork:
                         print(f"Singular system for node {node_l2r.name if hasattr(node_l2r, 'name') else 'node'}")
                     return False
                 
-                node_l2r.update_node(step_tensor, lr=lr)
+                node_l2r.update_node(step_tensor, lr=lr, adaptive_step=adaptive_step, min_norm=min_norm, max_norm=max_norm)
                 if orthonormalize:
                     self.node_orthonormalize_left(node_l2r)
                 if update_or_reset_stack == 'reset':
@@ -501,17 +511,25 @@ class TensorNetwork:
                         return True
                 if block_callback is not None:
                     block_callback(NS, node_l2r)
-
+            NS += 1
             if skip_second:
                 continue
 
             if isinstance(eps, list):
-                eps_ = eps[NS*2+1]
+                eps_ = eps[NS]
             else:
                 eps_ = eps
 
             # RIGHT TO LEFT
-            for node_r2l in self.train_nodes if direction == 'r2l' else reversed(self.train_nodes):
+            if node_order is not None:
+                if isinstance(node_order, tuple):
+                    second_node_order = node_order[1]
+                else:
+                    second_node_order = reversed(node_order)
+            else:
+                second_node_order = self.train_nodes
+            second_node_order = second_node_order if direction == 'r2l' else reversed(second_node_order)
+            for node_r2l in second_node_order:
                 if node_l2r in self.node_indices and node_r2l in self.node_indices and self.node_indices[node_l2r] == self.node_indices[node_r2l]:
                     continue
                 # Timeout check
@@ -557,7 +575,7 @@ class TensorNetwork:
                         print(f"Singular system for node {node_r2l.name if hasattr(node_r2l, 'name') else 'node'}")
                     return False
                 
-                node_r2l.update_node(step_tensor, lr=lr)
+                node_r2l.update_node(step_tensor, lr=lr, adaptive_step=adaptive_step, min_norm=min_norm, max_norm=max_norm)
                 if orthonormalize:
                     self.node_orthonormalize_right(node_r2l)
                 if update_or_reset_stack == 'reset':
@@ -597,6 +615,7 @@ class TensorNetwork:
                         return True
                 if block_callback is not None:
                     block_callback(NS, node_r2l)
+            NS += 1
 
         return True
 

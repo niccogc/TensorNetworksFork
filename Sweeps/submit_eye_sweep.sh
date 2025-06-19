@@ -15,4 +15,4 @@ source "/zhome/22/c/137477/miniforge3/etc/profile.d/conda.sh"
 conda activate s183995
 nvidia-smi
 export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:2048
-python train_tabular_sweep.py --sweep_id l528v76l --data_dir /work3/s183995/Tabular/data/processed --dataset_name eye --wandb_project Tabular --wandb_entity tensorGang --task classification --tt_method ridge_cholesky --tt_track_eval
+python train_tabular_sweep.py --sweep_id 8z888wp3 --data_dir /work3/s183995/Tabular/data/processed --dataset_name eye --wandb_project tabular3 --wandb_entity tensorGang --task classification --tt_method ridge_cholesky --tt_track_eval

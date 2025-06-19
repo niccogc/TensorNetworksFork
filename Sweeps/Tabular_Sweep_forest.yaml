@@ -1,0 +1,31 @@
+name: forest
+method: bayes
+metric:
+  goal: minimize
+  name: val/rmse
+parameters:
+  tt_N:
+    min: 3
+    max: 12
+  tt_r:
+    min: 2
+    max: 64
+  tt_layer_type:
+    values: [tt, operator, linear]
+  tt_num_swipes:
+    min: 1
+    max: 50
+  tt_eps_max:
+    distribution: log_uniform_values
+    min: 1e-12
+    max: 1e2
+  tt_eps_min:
+    distribution: log_uniform_values
+    min: 1e-12
+    max: 1e2
+  tt_lin_dim:
+    min: 0.0
+    max: 1.0
+  tt_lin_bond:
+    min: 0
+    max: 12

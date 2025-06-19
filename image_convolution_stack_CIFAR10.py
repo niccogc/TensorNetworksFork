@@ -23,8 +23,8 @@ for images, labels in train_loader:
 xinp_train = torch.cat(train_samples, dim=0).cuda()
 y_train = torch.cat(train_labels, dim=0).cuda()
 
-KERNEL_SIZE = 7
-STRIDE = 7
+KERNEL_SIZE = 4
+STRIDE = 4
 
 xinp_train = F.unfold(xinp_train, kernel_size=(KERNEL_SIZE,KERNEL_SIZE), stride=(STRIDE,STRIDE), padding=0).transpose(-2, -1)
 xinp_train = torch.cat((xinp_train, torch.zeros((xinp_train.shape[0], 1, xinp_train.shape[2]), device=xinp_train.device)), dim=-2)
@@ -55,15 +55,16 @@ from sklearn.metrics import balanced_accuracy_score
 import numpy as np
 from matplotlib import pyplot as plt
 
-num_swipes = 10
-epss = np.geomspace(10.0, 1e-2, 2*num_swipes).tolist()
+num_swipes = 20
+epss = np.geomspace(1e-1, 1e-8, 2*num_swipes).tolist()
 plt.plot(epss)
 
 N = 3
-r = 3
+r = 10
 CB = 0
 L = 2
-LB = 2
+lin_dim = 20
+lin_bond = 0
 
 def convergence_criterion(*args):
     y_pred_test = layer(xinp_test)
@@ -73,7 +74,8 @@ def convergence_criterion(*args):
     return False
 
 # Define Bregman function
-layer = TensorConvolutionGridTrainLayer(num_carriages=N, num_layers=L, bond_dim=r, layer_bond=LB, num_patches=xinp_train.shape[1], patch_pixels=xinp_train.shape[2], output_shape=y_train.shape[1]-1, convolution_bond=CB).cuda()
+#layer = TensorTrainSplitInputLayer(num_wagons=N, bond_dim=r, input_shape=())
+layer = TensorConvolutionGridTrainLayer(num_carriages=N, num_layers=L, bond_dim=r, lin_dim=lin_dim, lin_bond=lin_bond, num_patches=xinp_train.shape[1], patch_pixels=xinp_train.shape[2], output_shape=y_train.shape[1]-1, convolution_bond=CB).cuda()
 print('Num params:', layer.num_parameters())
 #%%
 from tensor.utils import visualize_tensornetwork
@@ -85,5 +87,5 @@ with torch.inference_mode():
     del y_pred
 bf = XEAutogradBregman(w=w)
 #%%
-layer.tensor_network.accumulating_swipe(xinp_train, y_train, bf, batch_size=512, delta=3.0, lr=1.0, convergence_criterion=convergence_criterion, orthonormalize=False, method='ridge_exact', eps=epss, verbose=2, num_swipes=num_swipes)
+layer.tensor_network.accumulating_swipe(xinp_train, y_train, bf, batch_size=512, delta=3.0, lr=1.0, convergence_criterion=convergence_criterion, orthonormalize=False, method='ridge_exact', eps=epss, verbose=2, num_swipes=num_swipes, disable_tqdm=True)
 #%%

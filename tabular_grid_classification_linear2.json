@@ -1,0 +1,13 @@
+{
+  "datasets": [
+    "covtype", "eye", "gesture", "helena", "jannis", "otto"
+  ],
+  "tt_N": [3, 4, 5, 8],
+  "tt_r": [4, 8, 12],
+  "tt_num_swipes": [3, 10],
+  "tt_lin_dim": [0.10, 0.25, 0.50],
+  "tt_lin_bond": [0, 2, 4],
+  "tt_eps_min": [1e-1, 1e-2, 5e-3],
+  "tt_eps_max": [5.0, 1.0, 0.1],
+  "model_type": ["tensor"]
+}

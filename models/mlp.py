@@ -4,7 +4,6 @@ import torch.optim as optim
 from tqdm import tqdm
 import numpy as np
 
-
 class MLP(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_layers=[64, 64], activation='relu'):
         super().__init__()
