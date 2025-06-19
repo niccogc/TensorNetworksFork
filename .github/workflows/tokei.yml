@@ -1,5 +1,5 @@
 # .github/workflows/update-tokei.yml
-name: Update Tokei Stats
+name: Update Tokei in README
 
 on:
   push:
@@ -16,19 +16,17 @@ jobs:
         with:
           tool: tokei
 
-      - name: Generate tokei stats
-        run: tokei . --output json > tokei.md
-
-      - name: Update README
+      - name: Generate README with Tokei stats
         run: |
-          awk '/<!-- tokei-start -->/,/<!-- tokei-end -->/' tokei.md > stats.md
-          awk '/<!-- tokei-start -->/ {print; system("cat stats.md"); next} /<!-- tokei-end -->/ {print; found=1; next} !found' README.md > new_README.md
-          mv new_README.md README.md
+          echo '# Code Statistics' > README.md
+          echo '```console' >> README.md
+          tokei . >> README.md
+          echo '```' >> README.md
 
       - name: Commit changes
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git add README.md
-          git commit -m "Update Tokei stats" || echo "No changes to commit"
+          git commit -m "Update Tokei stats" || echo "No changes"
           git push
