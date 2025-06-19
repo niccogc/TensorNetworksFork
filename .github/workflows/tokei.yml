@@ -8,15 +8,15 @@ on:
 jobs:
   update-readme:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
+
+      - uses: taiki-e/install-action@v2
         with:
-          fetch-depth: 0
+          tool: tokei
 
-      - name: Install tokei
-        run: sudo apt-get install -y tokei
-
-      - name: Generate tokei markdown
+      - name: Generate tokei stats
         run: tokei . --output markdown > tokei.md
 
       - name: Update README
