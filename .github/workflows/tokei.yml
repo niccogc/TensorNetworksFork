@@ -1,0 +1,34 @@
+# .github/workflows/update-tokei.yml
+name: Update Tokei Stats
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  update-readme:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install tokei
+        run: sudo apt-get install -y tokei
+
+      - name: Generate tokei markdown
+        run: tokei . --output markdown > tokei.md
+
+      - name: Update README
+        run: |
+          awk '/<!-- tokei-start -->/,/<!-- tokei-end -->/' tokei.md > stats.md
+          awk '/<!-- tokei-start -->/ {print; system("cat stats.md"); next} /<!-- tokei-end -->/ {print; found=1; next} !found' README.md > new_README.md
+          mv new_README.md README.md
+
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add README.md
+          git commit -m "Update Tokei stats" || echo "No changes to commit"
+          git push
