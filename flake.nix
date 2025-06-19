@@ -32,6 +32,7 @@
       packages = [
         (python.withPackages (p:
           with p; [
+            pip
             matplotlib
             tqdm
             torch
