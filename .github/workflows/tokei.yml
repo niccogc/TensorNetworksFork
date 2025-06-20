@@ -1,0 +1,32 @@
+# .github/workflows/update-tokei.yml
+name: Update Tokei in README
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  update-readme:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: tokei
+
+      - name: Generate README with Tokei stats
+        run: |
+          echo '# Code Statistics' > README.md
+          echo '```console' >> README.md
+          tokei . >> README.md
+          echo '```' >> README.md
+
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add README.md
+          git commit -m "Update Tokei stats" || echo "No changes"
+          git push
