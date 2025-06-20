@@ -409,7 +409,7 @@ class TensorNetwork:
             disable_tqdm = verbose < 2
 
         NS = 0
-        for _ in range(num_swipes):
+        for _ in (tbar:=tqdm(range(num_swipes), disable=disable_tqdm)):
             if isinstance(eps, list):
                 eps_ = eps[NS]
             else:
@@ -500,6 +500,8 @@ class TensorNetwork:
                 if block_callback is not None:
                     block_callback(NS, node_l2r)
             NS += 1
+            if not disable_tqdm:
+                tbar.set_postfix_str(f"NS: {NS}, eps: {eps_}, eps_r: {eps_r_}")
             if skip_second:
                 continue
 
@@ -516,7 +518,7 @@ class TensorNetwork:
                     second_node_order = reversed(node_order)
             else:
                 second_node_order = self.train_nodes
-            second_node_order = second_node_order if direction == 'r2l' else reversed(second_node_order)
+            second_node_order = second_node_order if direction == 'r2l' else reversed(list(second_node_order))
             for node_r2l in second_node_order:
                 if node_l2r in self.node_indices and node_r2l in self.node_indices and self.node_indices[node_l2r] == self.node_indices[node_r2l]:
                     continue
@@ -590,6 +592,8 @@ class TensorNetwork:
                 if block_callback is not None:
                     block_callback(NS, node_r2l)
             NS += 1
+            if not disable_tqdm:
+                tbar.set_postfix_str(f"NS: {NS}, eps: {eps_}, eps_r: {eps_r_}")
 
         return True
 
