@@ -60,7 +60,7 @@ class TensorNetworkLayer(nn.Module):
         return sum(p.tensor.numel() for p in self.tensor_network.train_nodes)
 
 class TensorTrainLayer(TensorNetworkLayer):
-    def __init__(self, num_carriages, bond_dim, input_features, output_shape=tuple(), ring=False, squeeze=True, constrict_bond=True, perturb=False, seed=None, nodes=None):
+    def __init__(self, num_carriages, bond_dim, input_features, output_shape=tuple(), ring=False, squeeze=True, constrict_bond=True, perturb=False, seed=None,dtype=None, nodes=None):
         """Initializes a TensorTrainLayer."""
         self.num_carriages = num_carriages
         self.bond_dim = bond_dim
@@ -75,7 +75,7 @@ class TensorTrainLayer(TensorNetworkLayer):
         # Create input nodes
         self.x_nodes = []
         for i in range(1, num_carriages+1):
-            x_node = TensorNode(torch.empty((1, input_features)), ['s', 'p'], name=f"X{i}")
+            x_node = TensorNode(torch.empty((1, input_features), dtype=dtype), ['s', 'p'], name=f"X{i}")
             self.x_nodes.append(x_node)
 
         
@@ -97,15 +97,15 @@ class TensorTrainLayer(TensorNetworkLayer):
 
         def build_perturb(rl, f, rr):
             if rl==rr:
-                block = torch.diag_embed(torch.ones(rr)).unsqueeze(1)
+                block = torch.diag_embed(torch.ones(rr, dtype=dtype)).unsqueeze(1)
             else:
-                block = torch.ones(rl, rr).unsqueeze(1)
+                block = torch.ones(rl, rr, dtype=dtype).unsqueeze(1)
 
             blockf = torch.cat((torch.zeros(rl, f-1, rr), block), dim=1)
             return blockf
 
         if perturb:
-            b0 = build_perturb(1, input_features, bond_dim)#torch.randn((1, input_features, bond_dim))
+            b0 = torch.randn((1, input_features, bond_dim), dtype=dtype) #build_perturb(1, input_features, bond_dim)
             bn = build_perturb(bond_dim, input_features, 1)
             left_stack = [b0]
             right_stack = [bn]
@@ -171,7 +171,7 @@ class TensorTrainLayer(TensorNetworkLayer):
 
                 left, right = self.ranks[i-1]
 
-                node = TensorNode((left, up, down, right), [left_label, up_label, 'p', right_label], l=left_label, r=right_label, name=f"A{i}")
+                node = TensorNode((left, up, down, right), [left_label, up_label, 'p', right_label], l=left_label, r=right_label, name=f"A{i}", dtype=dtype)
                 if i > 1:
                     self.nodes[-1].connect(node, left_label, priority=1)
                 if ring and i == num_carriages:

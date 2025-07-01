@@ -4,10 +4,10 @@ import numpy as np
 from collections import defaultdict
 
 class TensorNode:
-    def __init__(self, tensor_or_shape, dim_labels, l=None, r=None, name=None):
+    def __init__(self, tensor_or_shape, dim_labels, l=None, r=None, name=None, dtype=None):
         """Initializes a TensorNode object with the given shape and dimension labels."""
         if isinstance(tensor_or_shape, tuple) or isinstance(tensor_or_shape, list):
-            self.tensor = torch.randn(tensor_or_shape)
+            self.tensor = torch.randn(tensor_or_shape, dtype=dtype)
             self.tensor = self.tensor / torch.norm(self.tensor)
         else:
             self.tensor = tensor_or_shape
@@ -25,10 +25,12 @@ class TensorNode:
         self.connection_priority = defaultdict(float)
         self.contracted = set()
 
-    def contract_with(self, other_node, contract_labels):
+    def contract_with(self, other_node, contract_labels=None):
         """Contracts self with other_node over given dimensions, transferring priorities."""
         if self is other_node:
             return self
+        if contract_labels is None:
+            contract_labels = self.get_connecting_labels(other_node)
         contract_labels = [contract_labels] if isinstance(contract_labels, str) else contract_labels
 
         # Generate Einstein summation notation
@@ -46,7 +48,7 @@ class TensorNode:
         left_labels = [label for label in self.left_labels + other_node.left_labels if label not in contract_labels]
         right_labels = [label for label in self.right_labels + other_node.right_labels if label not in contract_labels]
 
-        node = TensorNode(contracted_tensor, new_dim_labels, l=left_labels, r=right_labels, name=f"{self.name}_{other_node.name}")
+        node = TensorNode(contracted_tensor, new_dim_labels, l=left_labels, r=right_labels, name=f"<{self.name}-{','.join(contract_labels)}-{other_node.name}>")
         node.contracted = self.contracted | other_node.contracted
         if not self.contracted:
             node.contracted.add(self)
