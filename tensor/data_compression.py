@@ -44,7 +44,6 @@ def train_concat(blocks1, blocks2, device='cpu'):
     output = []
     for b1, b2 in zip(blocks1, blocks2):
         output.append(concat(b1, b2, device=device))
-        #print("concat", 'b1 shape:', b1.shape, 'b2 shape:', b2.shape, 'output shape:', output[-1].shape)
     return output
 
 def block_left_feature_compress(block, rank=5, cut_off=None, full=True):

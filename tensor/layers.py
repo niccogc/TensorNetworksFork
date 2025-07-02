@@ -60,7 +60,7 @@ class TensorNetworkLayer(nn.Module):
         return sum(p.tensor.numel() for p in self.tensor_network.train_nodes)
 
 class TensorTrainLayer(TensorNetworkLayer):
-    def __init__(self, num_carriages, bond_dim, input_features, output_shape=tuple(), ring=False, squeeze=True, constrict_bond=True, perturb=False, seed=None, dtype=None):
+    def __init__(self, num_carriages, bond_dim, input_features, output_shape=tuple(), ring=False, squeeze=True, constrict_bond=True, perturb=False, seed=None,dtype=None, nodes=None):
         """Initializes a TensorTrainLayer."""
         self.num_carriages = num_carriages
         self.bond_dim = bond_dim
@@ -120,7 +120,6 @@ class TensorTrainLayer(TensorNetworkLayer):
                 left_stack.append(build_perturb(b0, input_features, bond_dim))
 
             self.pert_nodes = middle
-
             for i in range(1, num_carriages+1):
                 if i-1 < len(self.output_shape):
                     up = self.output_shape[i-1]
@@ -140,7 +139,7 @@ class TensorTrainLayer(TensorNetworkLayer):
                     node.connect(self.nodes[0], right_label, priority=0)
                 node.connect(self.x_nodes[i-1], 'p', priority=2)
                 self.nodes.append(node)
-        else:
+        if not perturb and nodes is None:
             b0 = build_left(1, input_features, bond_dim)
             bn = build_right(bond_dim, input_features, 1)
             left_stack = [b0]
@@ -180,6 +179,28 @@ class TensorTrainLayer(TensorNetworkLayer):
                 node.connect(self.x_nodes[i-1], 'p', priority=2)
                 self.nodes.append(node)
 
+        if nodes is not None:
+            print("ciaomamma")
+            self.given_nodes=nodes
+            for i in range(1, num_carriages+1):
+                if i-1 < len(self.output_shape):
+                    up = self.output_shape[i-1]
+                    up_label = f'c{i}'
+                    self.labels.append(up_label)
+                else:
+                    up = 1
+                    up_label = 'c'
+                down = input_features
+                left_label = 'rr' if ring and i == 1 else f'r{i}'
+                right_label = 'rr' if ring and i == num_carriages else f'r{i+1}'
+
+                node = TensorNode(self.given_nodes[i-1].unsqueeze(1), [left_label, up_label, 'p', right_label], l=left_label, r=right_label, name=f"A{i}")
+                if i > 1:
+                    self.nodes[-1].connect(node, left_label, priority=1)
+                if ring and i == num_carriages:
+                    node.connect(self.nodes[0], right_label, priority=0)
+                node.connect(self.x_nodes[i-1], 'p', priority=2)
+                self.nodes.append(node)
         # Squeeze singleton dimensions
         if squeeze:
             for node in self.nodes:
@@ -1426,4 +1447,3 @@ class CPDLayer(TensorNetworkLayer):
         # 4. Build the TensorNetwork
         tensor_network = CPDNetwork(self.x_nodes, self.nodes, output_labels=tuple(self.labels), sample_dim='SAMPLE')
         super(CPDLayer, self).__init__(tensor_network)
-
