@@ -1,5 +1,6 @@
 import torch
 from torch.nn import functional as F
+from torch import nn
 
 class BregFunction(torch.nn.Module):
     def transform_forward(self, x, y):
@@ -264,3 +265,33 @@ class AutogradBregman(BregFunction):
         dd_loss = torch.cat(B, dim=-2)
 
         return loss.detach(), d_loss.detach(), dd_loss.detach()
+    
+
+class AutogradLoss(nn.Module):
+    def __init__(self, loss_func=None):
+        super().__init__()
+        if loss_func is None:
+            loss_func = nn.MSELoss(reduction='none')
+        self.loss_func = loss_func
+            
+    def forward(self, y_pred, y_true, only_loss=False):
+        y_pred = y_pred.requires_grad_(True)
+        
+        loss = self.loss_func(y_pred, y_true)
+        if only_loss:
+            return loss
+
+        # Gradient of loss w.r.t x
+        d_loss = torch.autograd.grad(
+            outputs=loss.sum(), inputs=y_pred, create_graph=True, retain_graph=True
+        )[0]
+
+        # Hessian of loss w.r.t x
+        B = []
+        for i in range(d_loss.shape[-1]):
+            grad2 = torch.autograd.grad(d_loss[..., i].sum(), y_pred, retain_graph=True, create_graph=True)[0]
+            B.append(grad2.unsqueeze(-2))
+        dd_loss = torch.cat(B, dim=-2)
+
+        return loss.detach(), d_loss.detach(), dd_loss.detach()
+    

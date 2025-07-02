@@ -2,6 +2,7 @@ import networkx as nx
 import matplotlib.pyplot as plt
 from collections import deque
 import re
+import string
 
 def visualize_tensornetwork(tensornetwork, layout='grid', fig=None, ax=None):
     """
@@ -107,3 +108,13 @@ def visualize_tensornetwork(tensornetwork, layout='grid', fig=None, ax=None):
 
     plt.title("Tensor Network Visualization")
     plt.show()
+
+class EinsumLabeler:
+    def __init__(self):
+        self.letters = iter(string.ascii_letters)
+        self.mapping = {}
+    
+    def __getitem__(self, name):
+        if name not in self.mapping:
+            self.mapping[name] = next(self.letters)
+        return self.mapping[name]

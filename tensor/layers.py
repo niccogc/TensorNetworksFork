@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import numpy as np
-from tensor.network import TensorNetwork
+from tensor.network import TensorNetwork, CPDNetwork
 from tensor.node import TensorNode
 
 class TensorNetworkLayer(nn.Module):
@@ -1292,7 +1292,7 @@ class CompressedTensorTrainLayer(TensorNetworkLayer):
             return blockf
 
         if perturb:
-            b0 = build_perturb(1, self.physical_dims[0], bond_dim)#torch.randn((1, self.input_features, bond_dim))
+            b0 = build_perturb(1, self.physical_dims[0], bond_dim)#torch.randn((1, self.input_features, bond_dim)
             bn = build_perturb(bond_dim, self.physical_dims[-1], 1)
             left_stack = [b0]
             right_stack = [bn]
@@ -1370,3 +1370,60 @@ class CompressedTensorTrainLayer(TensorNetworkLayer):
         # Create a TensorNetwork
         tensor_network = TensorNetwork(self.x_nodes, self.nodes, output_labels=self.labels)
         super(CompressedTensorTrainLayer, self).__init__(tensor_network)
+
+class CPDLayer(TensorNetworkLayer):
+    def __init__(self, num_factors, rank, input_features, output_shape=tuple(), dtype=None):
+        """
+        Canonical Polyadic Decomposition (CPD) Layer.
+        Args:
+            num_factors: Number of factors (e.g., 3 for a 3-way tensor).
+            rank: CP rank (number of components).
+            input_features: Number of physical/input features per factor.
+            output_shape: Tuple of output dimensions (optional, default empty).
+            dtype: torch dtype for tensors (optional).
+        """
+        self.num_factors = num_factors
+        self.rank = rank
+        self.input_features = input_features
+        self.output_shape = output_shape if isinstance(output_shape, tuple) else (output_shape,)
+
+        # 1. Create input nodes
+        self.x_nodes = []
+        for i in range(1, num_factors + 1):
+            x_node = TensorNode(
+                (1, input_features),
+                ['SAMPLE', 'PHYS'],
+                name=f"X{i}"
+            )
+            self.x_nodes.append(x_node)
+
+        # 2. Create factor nodes
+        self.nodes = []
+        self.labels = ['SAMPLE']
+        for i in range(1, num_factors + 1):
+            # Output dimension for this factor (default 1 if not specified)
+            out_dim = self.output_shape[i-1] if i-1 < len(self.output_shape) else 1
+            # For the first factor, add an OUT leg for output, otherwise not
+            if i == 1:
+                node = TensorNode(
+                    (rank, input_features, out_dim),
+                    ['BOND', 'PHYS', 'OUT'],
+                    name=f"A{i}"
+                )
+                self.labels.append('OUT')
+            else:
+                node = TensorNode(
+                    (rank, input_features),
+                    ['BOND', 'PHYS'],
+                    name=f"A{i}"
+                )
+            self.nodes.append(node)
+
+        # 3. Connect input nodes to factor nodes along 'PHYS'
+        for x, a in zip(self.x_nodes, self.nodes):
+            x.connect(a, 'PHYS')
+
+        # 4. Build the TensorNetwork
+        tensor_network = CPDNetwork(self.x_nodes, self.nodes, output_labels=tuple(self.labels), sample_dim='SAMPLE')
+        super(CPDLayer, self).__init__(tensor_network)
+
