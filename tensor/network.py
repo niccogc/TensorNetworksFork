@@ -1,4 +1,5 @@
 import torch
+import string
 from torch import nn
 import string
 from collections import deque
@@ -7,6 +8,7 @@ from tqdm.auto import tqdm
 import time
 import numpy as np
 from scipy.sparse.linalg import LinearOperator, cg
+from tensor.utils import EinsumLabeler
 
 class TensorNetwork:
     def __init__(self, input_nodes, main_nodes, train_nodes=None, output_labels=('s',), sample_dim='s'):
@@ -20,7 +22,7 @@ class TensorNetwork:
         self.output_labels = output_labels
         self.sample_dim = sample_dim
         self.nodes, self.node_indices = self._discover_nodes()
-    
+
     def cuda(self):
         """Moves all tensors to the GPU."""
         for node in self.nodes:
@@ -73,7 +75,7 @@ class TensorNetwork:
         self.left_stacks = self.compute_stacks("left", exclude_nodes)
         self.right_stacks = self.compute_stacks("right", exclude_nodes)
 
-    def reset_stacks(self):
+    def reset_stacks(self, node=None):
         """Resets the left and right stacks to None."""
         self.left_stacks = None
         self.right_stacks = None
@@ -98,7 +100,7 @@ class TensorNetwork:
 
     def compute_jacobian_stack(self, node) -> TensorNode:
         """Computes the jacobian of a node by contracting all non-left/right connections separately."""
-        
+
         left_stack, right_stack = self.get_stacks(node)
         column_nodes = self.get_column_nodes(node)
         node_iter = iter(column_nodes)
@@ -107,7 +109,7 @@ class TensorNetwork:
             contracted = contracted.contract_with(vnode, vnode.get_connecting_labels(contracted))
         if right_stack is not None:
             contracted = contracted.contract_with(right_stack, right_stack.get_connecting_labels(contracted))
-        
+
         return contracted
 
     def forward(self, x):
@@ -159,7 +161,7 @@ class TensorNetwork:
         # Determine broadcast
         broadcast_dims = tuple(d for d in self.output_labels if d not in node.dim_labels)
         non_broadcast_dims = tuple(d for d in self.output_labels if d != self.sample_dim)
-        
+
         # Compute the Jacobian
         J = self.compute_jacobian_stack(node).expand_labels(self.output_labels, grad.shape).permute_first(*broadcast_dims)
 
@@ -168,7 +170,7 @@ class TensorNetwork:
         dim_labels = {dim: next(all_letters) for dim in self.output_labels}  # Assign letters to output dims
         for d in non_broadcast_dims:
             dim_labels['_' + d] = next(all_letters)
-        
+
         dd_loss_ein = ''.join([dim_labels[self.sample_dim]] + [dim_labels[d] for d in non_broadcast_dims] + [dim_labels['_' + d] for d in non_broadcast_dims])
         d_loss_ein = ''.join(dim_labels[d] for d in self.output_labels)
 
@@ -194,25 +196,24 @@ class TensorNetwork:
         # Construct einsum notations
         einsum_A = f'{J_ein1},{J_ein2},{dd_loss_ein}->{J_out1}{J_out2}'
         einsum_b = f"{J_ein1},{d_loss_ein}->{J_out1}"
-        
+
         # Compute einsum operations
         A = torch.einsum(einsum_A, J.tensor.conj(), J.tensor, hessian)
         b = torch.einsum(einsum_b, J.tensor.conj(), grad)
 
         return A, b
-    
+
     def get_J(self, node, grad):
         # Determine broadcast
         broadcast_dims = tuple(d for d in self.output_labels if d not in node.dim_labels)
         non_broadcast_dims = tuple(d for d in self.output_labels if d != self.sample_dim)
-        
+
         # Compute the Jacobian
         J = self.compute_jacobian_stack(node)
         J = J.expand_labels(self.output_labels, grad.shape)
         J = J.permute_first(*broadcast_dims)
 
         # Assign unique einsum labels
-        import string
         all_letters = iter(string.ascii_letters)
         dim_labels = {dim: next(all_letters) for dim in self.output_labels}  # Assign letters to output dims
         for d in non_broadcast_dims:
@@ -235,7 +236,7 @@ class TensorNetwork:
         J_out1 = ''.join([J_out1[dim_order.index(d)] for d in node.dim_labels])
 
         return {
-            'J': J.permute_first(dim_order, expand=False), 
+            'J': J.permute_first(dim_order, expand=False),
             'einsum': J_ein1,
             'node_ein': J_out1,
             'dd_loss_ein': dd_loss_ein,
@@ -312,12 +313,11 @@ class TensorNetwork:
             else:
                 A_f = A_f + (2 * eps) * torch.eye(A_f.shape[-1], dtype=A_f.dtype, device=A_f.device)
                 b_f = b_f + (2 * eps) * node.tensor.flatten()
-                
+
             L = torch.linalg.cholesky(A_f)
             x = torch.cholesky_solve(-b_f.unsqueeze(-1), L)
             x = x.squeeze(-1)
         elif method.lower() == 'cholesky':
-            A_f = A_f + eps * torch.eye(A_f.shape[-1], dtype=A_f.dtype, device=A_f.device)
             L = torch.linalg.cholesky(A_f)
             x = torch.cholesky_solve(-b_f.unsqueeze(-1), L)
             x = x.squeeze(-1)
@@ -327,7 +327,6 @@ class TensorNetwork:
         step_tensor = x.reshape(b.shape)
         return step_tensor
 
-
     def set_input(self, x):
         """Sets the input tensor for the network."""
         was_updated = False
@@ -335,17 +334,17 @@ class TensorNetwork:
             for node, tensor in zip(self.input_nodes, x):
                 if node.tensor is not tensor:
                     was_updated = True
-                node.set_tensor(tensor)
+                    node.set_tensor(tensor)
         else:
             for node in self.input_nodes:
                 if node.tensor is not x:
                     was_updated = True
-                node.set_tensor(x)
+                    node.set_tensor(x)
         if was_updated:
             self.left_stacks = None
             self.right_stacks = None
         return was_updated
-    
+
     def disconnect(self, nodes):
         """Creates a new TensorNetwork without the given nodes and their connections.
         The nodes themselves are virtual copies with their own connections dictionary.
@@ -398,10 +397,10 @@ class TensorNetwork:
 
         def move_batch(batch):
             if model_device is not None and data_device is not None and data_device != model_device:
-                if isinstance(batch, torch.Tensor):
+                if isinstance(batch, torch.Tensor) and batch.device != model_device:
                     return batch.to(model_device, non_blocking=True)
                 elif isinstance(batch, (list, tuple)):
-                    return [b.to(model_device, non_blocking=True) for b in batch]
+                    return [b.to(model_device, non_blocking=True) if b.device != model_device else b for b in batch]
             return batch
 
         # If disable_tqdm is not set, default to verbose < 2
@@ -442,17 +441,19 @@ class TensorNetwork:
                     if timeout is not None and (time.time() - start_time) > timeout:
                         print(f"Timeout reached ({timeout} seconds). Stopping accumulating_swipe.")
                         return False
-                    if blocks_input:
+                    if blocks_input or batch_size == data_size:
                         x_batch = x
                         y_batch = y_true
                     else:
                         x_batch = x[b*batch_size:(b+1)*batch_size] if isinstance(x, torch.Tensor) else [x[i][b*batch_size:(b+1)*batch_size] for i in range(len(x))]
                         y_batch = y_true[b*batch_size:(b+1)*batch_size]
-                    
+
                     x_batch = move_batch(x_batch)
                     y_batch = move_batch(y_batch)
 
-                    y_pred = self.forward(x_batch).permute_first(*self.output_labels).tensor
+                    y_pred = self.forward(x_batch)
+                    y_pred = y_pred.permute_first(*self.output_labels)
+                    y_pred = y_pred.tensor
                     loss, d_loss, sqd_loss = loss_fn.forward(y_pred, y_batch)
 
                     A, b_vec = self.get_A_b(node_l2r, d_loss, sqd_loss)
@@ -464,7 +465,6 @@ class TensorNetwork:
                         b_out.add_(b_vec)
 
                     total_loss += loss.mean().item()
-
                 if verbose > 1:
                     print(f"NS: {NS}, Left loss ({node_l2r.name if hasattr(node_l2r, 'name') else 'node'}):", total_loss / batches, f" (eps: {eps_})", f" (eps_r: {eps_r_})")
                 try:
@@ -477,13 +477,12 @@ class TensorNetwork:
                     if verbose > 0:
                         print(f"Singular system for node {node_l2r.name if hasattr(node_l2r, 'name') else 'node'}")
                     return False
-                
+
                 node_l2r.update_node(step_tensor, lr=lr, adaptive_step=adaptive_step, min_norm=min_norm, max_norm=max_norm)
                 if orthonormalize:
                     self.node_orthonormalize_left(node_l2r)
                 if update_or_reset_stack == 'reset':
-                    self.left_stacks = None
-                    self.right_stacks = None
+                    self.reset_stacks(node_l2r)
                 elif update_or_reset_stack == 'update':
                     self.left_update_stacks(node_l2r)
                 if loss_callback is not None:
@@ -534,7 +533,7 @@ class TensorNetwork:
                     if timeout is not None and (time.time() - start_time) > timeout:
                         print(f"Timeout reached ({timeout} seconds). Stopping accumulating_swipe.")
                         return False
-                    if blocks_input:
+                    if blocks_input or batch_size == data_size:
                         x_batch = x
                         y_batch = y_true
                     else:
@@ -569,13 +568,12 @@ class TensorNetwork:
                     if verbose > 0:
                         print(f"Singular system for node {node_r2l.name if hasattr(node_r2l, 'name') else 'node'}")
                     return False
-                
+
                 node_r2l.update_node(step_tensor, lr=lr, adaptive_step=adaptive_step, min_norm=min_norm, max_norm=max_norm)
                 if orthonormalize:
                     self.node_orthonormalize_right(node_r2l)
                 if update_or_reset_stack == 'reset':
-                    self.left_stacks = None
-                    self.right_stacks = None
+                    self.reset_stacks(node_r2l)
                 elif update_or_reset_stack == 'update':
                     self.right_update_stacks(node_r2l)
                 if loss_callback is not None:
@@ -747,7 +745,7 @@ class TensorNetwork:
 
                     b_vec = self.get_b(node, d_loss)
                     b_rhs.add_(b_vec)
-                    
+
                     d_losss.append(d_loss)
                     dd_losss.append(sqd_loss)
                     if loss_callback is not None:
@@ -819,7 +817,7 @@ class TensorNetwork:
                 if block_callback is not None:
                     block_callback(NS, node)
         return True
-    
+
     def scipy_swipe(self, x, y_true, loss_fn, solver, batch_size=1, num_swipes=1, lr=1.0, max_iter=50, tol=1e-6, verbose=False, timeout=None, data_device=None, model_device=None, disable_tqdm=None, block_callback=None, loss_callback=None):
         """
         Swipes the network to minimize the loss using SciPy for each node, without forming the full Gramian.
@@ -871,10 +869,10 @@ class TensorNetwork:
 
                     b_vec = self.get_b(node, d_loss)
                     b_rhs.add_(b_vec)
-                    
+
                     d_losss.append(d_loss)
                     dd_losss.append(sqd_loss)
-                    
+
                     if loss_callback is not None:
                         loss_total += loss.mean().item()
                 if loss_callback is not None:
@@ -919,3 +917,52 @@ class TensorNetwork:
                     block_callback(NS, node)
                 t_bar.close()
         return True
+
+
+class CPDNetwork(TensorNetwork):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.node_contract = None
+
+    def set_input(self, x):
+        """Sets the input tensor for the network."""
+        was_updated = super().set_input(x)
+        if was_updated:
+            self.node_contract = None
+        return was_updated
+
+    def recompute_all_stacks(self):
+        self.node_contract = {}
+        for n in self.input_nodes:
+            stack = n
+            for vnode in self.get_column_nodes(n):
+                stack = stack.contract_with(vnode)
+            self.node_contract[n] = stack
+
+    def compute_jacobian_stack(self, node) -> TensorNode:
+        labeler = EinsumLabeler()
+        nodes = [c if x not in self.get_column_nodes(node) else x for x, c in self.node_contract.items()]
+        jac = torch.einsum(','.join([''.join([labeler[l] for l in n.dim_labels]) for n in nodes])+f'->{labeler[self.sample_dim]}'+''.join([labeler[l] for l in node.dim_labels if l in labeler.mapping]), *[n.tensor for n in nodes])
+        return TensorNode(jac, dim_labels=[self.sample_dim]+[l for l in node.dim_labels if l in labeler.mapping], name='CPDJacobian')
+
+    def forward(self, x):
+        """Computes the forward pass of the network."""
+        self.set_input(x)
+
+        if self.node_contract is None:
+            self.recompute_all_stacks()
+        labeler = EinsumLabeler()
+        out = torch.einsum(','.join([''.join([labeler[l] for l in n.dim_labels]) for n in self.node_contract.values()])+f'->{labeler[self.sample_dim]}'+''.join([labeler[l] for l in self.output_labels if l != self.sample_dim]), *[self.node_contract[n].tensor for n in self.input_nodes])
+        return TensorNode(out, dim_labels=[self.sample_dim] + [l for l in self.output_labels if l != self.sample_dim], name='CPDOutput')
+    
+    def reset_stacks(self, node=None):
+        if node is not None:
+            # Update the column corresponding to this node (first get the input node)
+            input_node = next((n for n in self.input_nodes if n in self.get_column_nodes(node)), None)
+            if input_node is not None:
+                stack = input_node
+                for vnode in self.get_column_nodes(input_node):
+                    stack = stack.contract_with(vnode)
+                self.node_contract[input_node] = stack
+        else:
+            self.node_contract = None
