@@ -295,3 +295,37 @@ class AutogradLoss(nn.Module):
 
         return loss.detach(), d_loss.detach(), dd_loss.detach()
     
+from torch.distributions import Normal
+
+class UncertaintyAutogradLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+            
+    def forward(self, y_pred, y_true, only_loss=False):
+        y_pred = y_pred.requires_grad_(True)
+
+        y_mean = y_pred[..., 0]
+        y_std = torch.nn.functional.softplus(y_pred[..., 1])
+
+        # Define normal distribution
+        normal = Normal(loc=y_mean, scale=y_std)
+
+        # NLL Loss
+        loss = -normal.log_prob(y_true)
+        if only_loss:
+            return loss
+
+        # Gradient of loss w.r.t x
+        d_loss = torch.autograd.grad(
+            outputs=loss.sum(), inputs=y_pred, create_graph=True, retain_graph=True
+        )[0]
+
+        # Hessian of loss w.r.t x
+        B = []
+        for i in range(d_loss.shape[-1]):
+            grad2 = torch.autograd.grad(d_loss[..., i].sum(), y_pred, retain_graph=True, create_graph=True)[0]
+            B.append(grad2.unsqueeze(-2))
+        dd_loss = torch.cat(B, dim=-2)
+
+        return loss.detach(), d_loss.detach(), dd_loss.detach()
+    
