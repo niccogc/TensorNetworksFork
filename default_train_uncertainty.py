@@ -19,7 +19,7 @@ def load_tabular_data(filename, device):
     y_test = data['y_test'].to(device)
     return x_train, y_train, x_val, y_val, x_test, y_test
 
-x_train, y_train, x_val, y_val, x_test, y_test = load_tabular_data('/work3/aveno/Tabular/data/processed/house_tensor.pt', device='cuda')
+x_train, y_train, x_val, y_val, x_test, y_test = load_tabular_data('/work3/s183995/Tabular/data/processed/house_tensor.pt', device='cuda')
 
 x_train = torch.tensor(x_train, device='cuda')
 x_std, x_mean = torch.std_mean(x_train, dim=0, unbiased=False, keepdim=True)
@@ -98,23 +98,24 @@ def plot_data(y_pred):
     plt.show()
     plt.close()  # Close the figure to free memory
 #%%
-N = 3
-r = 27
-NUM_SWIPES = 4
+from tensor.bregman import UncertaintyAutogradLoss
+N = 4
+r = 20
+NUM_SWIPES = 10
 method = 'ridge_cholesky'
-epss = np.geomspace(0.07542717629430484, 0.00000000000722857583, 2*NUM_SWIPES).tolist()
+epss = np.geomspace(10, 1e-10, 2*NUM_SWIPES).tolist()
 # Define Bregman function
-bf = SquareBregFunction()
-layer = TensorTrainLayer(N, r, x_train.shape[1], output_shape=1, constrict_bond=True, perturb=True, seed=42).cuda()
+bf = UncertaintyAutogradLoss()#SquareBregFunction()
+layer = TensorTrainLayer(N, r, x_train.shape[1], output_shape=(2,), constrict_bond=True, perturb=False, seed=42).cuda()
 #%%
 train_loss_dict = {}
 val_loss_dict = {}
 def convergence_criterion():
-    y_pred_train = layer(x_train)
+    y_pred_train = layer(x_train)[..., 0]
     rmse = torch.sqrt(torch.mean((y_pred_train - y_train)**2))
     print('Train RMSE:', rmse.item())
     
-    y_pred_val = layer(x_val)
+    y_pred_val = layer(x_val)[..., 0]
     rmse = torch.sqrt(torch.mean((y_pred_val - y_val)**2))
     print('Val RMSE:', rmse.item())
 
@@ -126,8 +127,14 @@ def convergence_criterion():
     #layer.tensor_network.train_nodes[-num_swipes-1:(-num_swipes) if num_swipes > 0 else None]
     #torch.nn.init.trunc_normal_(layer.tensor_network.train_nodes[num_swipes].tensor, mean=0.0, std=0.02, a=-0.04, b=0.04)
     #layer.tensor_network.accumulating_swipe(x_train, y_train, bf, node_order=layer.tensor_network.train_nodes[num_swipes:num_swipes+1], batch_size=512, lr=1.0, eps=epss[num_swipes], eps_r=0.5, convergence_criterion=convergence_criterion, orthonormalize=False, method=method, verbose=2, num_swipes=1, skip_second=True, direction='l2r', disable_tqdm=True)
-layer.tensor_network.accumulating_swipe(x_train, y_train, bf, batch_size=512, lr=1.0, eps=epss, eps_r=0.5, convergence_criterion=convergence_criterion, orthonormalize=False, method=method, verbose=2, num_swipes=NUM_SWIPES, skip_second=False, direction='l2r', disable_tqdm=True)
+layer.tensor_network.accumulating_swipe(x_train, y_train, bf, batch_size=512, lr=1.0, eps=epss, eps_r=0.5, convergence_criterion=convergence_criterion, orthonormalize=False, method=method, verbose=2, num_swipes=NUM_SWIPES, skip_second=True, direction='l2r', disable_tqdm=True)
 convergence_criterion()
-print("Train:",(y_train.real - layer(x_train).real).square().mean().sqrt())
-print("Val:",(y_val.real - layer(x_val).real).square().mean().sqrt())
+print("Train:",(y_train.real - layer(x_train)[..., 0].real).square().mean().sqrt())
+print("Val:",(y_val.real - layer(x_val)[..., 0].real).square().mean().sqrt())
 #%%
+from matplotlib import pyplot as plt
+plt.scatter(layer(x_val)[..., 0].cpu().numpy(), y_val.cpu().numpy(), s=1, alpha=0.5, marker='o', label='Predictions')
+plt.xlabel('Predicted Output')
+plt.ylabel('True Output')
+plt.title('Predicted vs True Output')
+# %%

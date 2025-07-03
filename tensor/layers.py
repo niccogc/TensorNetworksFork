@@ -3,6 +3,8 @@ import torch.nn as nn
 import numpy as np
 from tensor.network import TensorNetwork, CPDNetwork
 from tensor.node import TensorNode
+from collections import defaultdict
+from tensor.data_compression import train_concat
 
 class TensorNetworkLayer(nn.Module):
     def __init__(self, tensor_network: TensorNetwork, labels=None):
@@ -59,8 +61,9 @@ class TensorNetworkLayer(nn.Module):
         """Returns the number of parameters in the layer."""
         return sum(p.tensor.numel() for p in self.tensor_network.train_nodes)
 
+
 class TensorTrainLayer(TensorNetworkLayer):
-    def __init__(self, num_carriages, bond_dim, input_features, output_shape=tuple(), ring=False, squeeze=True, constrict_bond=True, perturb=False, seed=None,dtype=None, nodes=None):
+    def __init__(self, num_carriages, bond_dim, input_features, output_shape=tuple(), ring=False, squeeze=True, constrict_bond=True, perturb=False, seed=None, dtype=None, nodes=None):
         """Initializes a TensorTrainLayer."""
         self.num_carriages = num_carriages
         self.bond_dim = bond_dim
@@ -102,10 +105,10 @@ class TensorTrainLayer(TensorNetworkLayer):
                 block = torch.ones(rl, rr, dtype=dtype).unsqueeze(1)
 
             blockf = torch.cat((torch.zeros(rl, f-1, rr), block), dim=1)
-            return blockf
+            return blockf.unsqueeze(1)
 
-        if perturb:
-            b0 = torch.randn((1, input_features, bond_dim), dtype=dtype) #build_perturb(1, input_features, bond_dim)
+        if perturb and nodes is None:
+            b0 = torch.randn((1, self.output_shape[0], input_features, bond_dim), dtype=dtype) #
             bn = build_perturb(bond_dim, input_features, 1)
             left_stack = [b0]
             right_stack = [bn]
@@ -132,14 +135,14 @@ class TensorTrainLayer(TensorNetworkLayer):
                 left_label = 'rr' if ring and i == 1 else f'r{i}'
                 right_label = 'rr' if ring and i == num_carriages else f'r{i+1}'
 
-                node = TensorNode(self.pert_nodes[i-1].unsqueeze(1), [left_label, up_label, 'p', right_label], l=left_label, r=right_label, name=f"A{i}")
+                node = TensorNode(self.pert_nodes[i-1], [left_label, up_label, 'p', right_label], l=left_label, r=right_label, name=f"A{i}")
                 if i > 1:
                     self.nodes[-1].connect(node, left_label, priority=1)
                 if ring and i == num_carriages:
                     node.connect(self.nodes[0], right_label, priority=0)
                 node.connect(self.x_nodes[i-1], 'p', priority=2)
                 self.nodes.append(node)
-        if not perturb and nodes is None:
+        elif not perturb and nodes is None:
             b0 = build_left(1, input_features, bond_dim)
             bn = build_right(bond_dim, input_features, 1)
             left_stack = [b0]
@@ -178,10 +181,8 @@ class TensorTrainLayer(TensorNetworkLayer):
                     node.connect(self.nodes[0], right_label, priority=0)
                 node.connect(self.x_nodes[i-1], 'p', priority=2)
                 self.nodes.append(node)
-
-        if nodes is not None:
-            print("ciaomamma")
-            self.given_nodes=nodes
+        elif nodes is not None:
+            self.given_nodes = nodes
             for i in range(1, num_carriages+1):
                 if i-1 < len(self.output_shape):
                     up = self.output_shape[i-1]
@@ -194,7 +195,7 @@ class TensorTrainLayer(TensorNetworkLayer):
                 left_label = 'rr' if ring and i == 1 else f'r{i}'
                 right_label = 'rr' if ring and i == num_carriages else f'r{i+1}'
 
-                node = TensorNode(self.given_nodes[i-1].unsqueeze(1), [left_label, up_label, 'p', right_label], l=left_label, r=right_label, name=f"A{i}")
+                node = TensorNode(self.given_nodes[i-1], [left_label, up_label, 'p', right_label], l=left_label, r=right_label, name=f"A{i}")
                 if i > 1:
                     self.nodes[-1].connect(node, left_label, priority=1)
                 if ring and i == num_carriages:
@@ -246,6 +247,29 @@ class TensorTrainLayer(TensorNetworkLayer):
         self.num_carriages += 1
         self.tensor_network = TensorNetwork(self.x_nodes, self.nodes, output_labels=self.labels)
         return self
+
+
+def concatenate_trains(tensor_layers):
+    nodes_to_concat = defaultdict(list)
+    for i, layer in enumerate(tensor_layers):
+        for j, n in enumerate(layer.nodes):
+            tensor_block = n.tensor
+            if j == 0:
+                tensor_block = tensor_block.unsqueeze(0)
+            elif j == len(layer.nodes) - 1:
+                tensor_block = tensor_block.unsqueeze(-1)
+            if j >= len(layer.labels) - 1:
+                tensor_block = tensor_block.unsqueeze(1)
+            nodes_to_concat[i].append(tensor_block)
+    
+    
+    train = nodes_to_concat[0]
+    for i in range(1, len(tensor_layers)):
+        train = train_concat(train, nodes_to_concat[i])
+
+    train[0] = train[0] / len(tensor_layers)
+    
+    return TensorTrainLayer(num_carriages=len(train), bond_dim=tensor_layers[0].bond_dim, input_features=tensor_layers[0].input_features, output_shape=tensor_layers[0].output_shape, nodes=train, squeeze=True)
 
 class TensorTrainDMRGInfiLayer(TensorNetworkLayer):
     def __init__(self, bond_dim, input_features, output_shape=tuple(), ring=False, squeeze=True, constrict_bond=True):
@@ -559,7 +583,7 @@ class TensorOperatorLayer(TensorNetworkLayer):
 
 
 class TensorConvolutionTrainLayer(TensorNetworkLayer):
-    def __init__(self, num_carriages, bond_dim, num_patches, patch_pixels, output_shape, ring=False, convolution_bond=-1):
+    def __init__(self, num_carriages, bond_dim, num_patches, patch_pixels, output_shape, ring=False, convolution_bond=-1, dtype=None, constrict_bond=True, perturb=False):
         """Initializes a TensorConvolutionTrainLayer."""
         if ring:
             raise NotImplementedError("Ring structure is not implemented for TensorConvolutionTrainLayer.")
@@ -577,13 +601,49 @@ class TensorConvolutionTrainLayer(TensorNetworkLayer):
         x_nodes = []
         conv_blocks = []
         train_blocks = []
+        if perturb:
+            def build_perturb(rl, f, rr):
+                if rl==rr:
+                    block = torch.diag_embed(torch.ones(rr, dtype=dtype)).unsqueeze(1)
+                else:
+                    block = torch.ones(rl, rr, dtype=dtype).unsqueeze(1)
+
+                blockf = torch.cat((torch.zeros(rl, f-1, rr), block), dim=1)
+                return blockf
+            
+            b0 = torch.randn((1, num_patches, bond_dim), dtype=dtype) #build_perturb(1, num_patches, bond_dim)
+            bn = build_perturb(bond_dim, num_patches, 1)
+            left_stack = [b0]
+            right_stack = [bn]
+            middle = [b0, bn]
+            for i in range(num_carriages-2):
+                b0 = left_stack[-1].shape[-1]
+                b1 = right_stack[0].shape[0]
+                if i == num_carriages-3:
+                    middle_block = build_perturb(b0, num_patches, b1)
+                    middle = [*left_stack, middle_block, *right_stack]
+                left_stack.append(build_perturb(b0, num_patches, bond_dim))
+
+            blocks = [b.unsqueeze(1) for b in middle]
+        else:
+            blocks = []
+            for i in range(1, num_carriages+1):
+                blocks.append((bond_dim if i != 1 else 1, self.output_shape[i-1] if i <= len(self.output_shape) else 1, num_patches, bond_dim if i != num_carriages else 1))
+
         for i in range(1, num_carriages+1):
+            if i-1 < len(self.output_shape):
+                up_label = f'c{i}'
+            else:
+                up_label = 'c'
+            left_label = f'r{i}'
+            right_label = f'r{i+1}'
+
             x_node = TensorNode((1, num_patches, patch_pixels), ['s', 'patches', 'patch_pixels'], name=f"X{i}")
             if convolution_bond > 0:
                 conv_block = TensorNode((convolution_bond if i != 1 else 1, patch_pixels, convolution_bond if i != num_carriages else 1), [f'CB{i}', 'patch_pixels', f'CB{i+1}'], l=f'CB{i}', r=f'CB{i+1}', name=f"C{i}")
             else:
                 conv_block = TensorNode((patch_pixels,), ['patch_pixels'], name=f"C{i}")
-            train_block = TensorNode((bond_dim if i != 1 else 1, self.output_shape[i-1] if i <= len(self.output_shape) else 1, num_patches, bond_dim if i != num_carriages else 1), [f'r{i}', f'c{i}', 'patches', f'r{i+1}'], l=f'r{i}', r=f'r{i+1}', name=f"A{i}")
+            train_block = TensorNode(blocks[i-1], [left_label, up_label, 'patches', right_label], l=f'r{i}', r=f'r{i+1}', name=f"A{i}")
             x_nodes.append(x_node)
             conv_blocks.append(conv_block)
             train_blocks.append(train_block)

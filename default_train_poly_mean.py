@@ -81,17 +81,17 @@ def plot_data(y_pred):
     plt.show()
     plt.close()  # Close the figure to free memory
 #%%
-N = 6
-r = 3
+N = 5
+r = 15
 NUM_SWIPES = 1
 method = 'ridge_cholesky'
 epss = [1e-12]*NUM_SWIPES*2# + np.geomspace(0.5, 0.01, NUM_SWIPES*2).tolist()
 # Define Bregman function
 bf = SquareBregFunction()
-layer = TensorTrainLayer(N, r, x_train.shape[1], output_shape=1, constrict_bond=True, perturb=True, seed=42).cpu()
-
-layer1 = TensorTrainLayer(N, r, x_train.shape[1], output_shape=1, constrict_bond=True, perturb=False, seed=46).cpu()
-
+layers = [TensorTrainLayer(N, r, x_train.shape[1], output_shape=1, constrict_bond=True, perturb=True, seed=42).cpu() for _ in range(5)]
+# Divide the training data into parts
+x_train_sep = []
+#%%
 train_loss_dict = {}
 val_loss_dict = {}
 def convergence_criterion():

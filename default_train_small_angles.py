@@ -19,13 +19,13 @@ def load_tabular_data(filename, device):
     y_test = data['y_test'].to(device)
     return x_train, y_train, x_val, y_val, x_test, y_test
 
-x_train, y_train, x_val, y_val, x_test, y_test = load_tabular_data('/work3/aveno/Tabular/data/processed/house_tensor.pt', device='cuda')
+x_train, y_train, x_val, y_val, x_test, y_test = load_tabular_data('/work3/s183995/Tabular/data/processed/house_tensor.pt', device='cuda')
 
 x_train = torch.tensor(x_train, device='cuda')
 x_std, x_mean = torch.std_mean(x_train, dim=0, unbiased=False, keepdim=True)
-x_train = (x_train - x_mean) / x_std
-x_test = (x_test - x_mean) / x_std
-x_val = (x_val - x_mean) / x_std
+x_train = (x_train - x_mean ) / x_std + 1
+x_test = (x_test - x_mean) / x_std + 1
+x_val = (x_val - x_mean) / x_std + 1
 
 x_min, x_max = x_train.amin(dim=0, keepdim=True), x_train.amax(dim=0, keepdim=True)
 x_test = torch.tensor(x_test, device='cuda')
@@ -99,13 +99,13 @@ def plot_data(y_pred):
     plt.close()  # Close the figure to free memory
 #%%
 N = 3
-r = 27
-NUM_SWIPES = 4
+r = 8
+NUM_SWIPES = 5
 method = 'ridge_cholesky'
-epss = np.geomspace(0.07542717629430484, 0.00000000000722857583, 2*NUM_SWIPES).tolist()
+epss = np.geomspace(1e-12, 1e-10, 2*NUM_SWIPES).tolist()
 # Define Bregman function
 bf = SquareBregFunction()
-layer = TensorTrainLayer(N, r, x_train.shape[1], output_shape=1, constrict_bond=True, perturb=True, seed=42).cuda()
+layer = TensorTrainLayer(N, r, x_train.shape[1], output_shape=1, constrict_bond=True, perturb=False, seed=42).cuda()
 #%%
 train_loss_dict = {}
 val_loss_dict = {}
