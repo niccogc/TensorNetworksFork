@@ -34,6 +34,8 @@ class TensorNetworkLayer(nn.Module):
                     node.tensor = tensor_params[f"tensor_param_{i}"]
             else:
                 raise ValueError(f"Missing parameter: tensor_param_{i}")
+        
+        self.tensor_network.reset_stacks()
 
     def cuda(self, *args, **kwargs):
         """Moves the layer to the GPU."""
@@ -108,19 +110,19 @@ class TensorTrainLayer(TensorNetworkLayer):
             return blockf.unsqueeze(1)
 
         if perturb and nodes is None:
-            b0 = torch.randn((1, self.output_shape[0], input_features, bond_dim), dtype=dtype) #
+            b0 = 0.02 * torch.randn((1, self.output_shape[0], input_features, bond_dim), dtype=dtype) #
             bn = build_perturb(bond_dim, input_features, 1)
             left_stack = [b0]
             right_stack = [bn]
             middle = [b0, bn]
             for i in range(num_carriages-2):
                 
-                b0 = left_stack[-1].shape[-1]
-                b1 = right_stack[0].shape[0]
+                rl = left_stack[-1].shape[-1]
+                rr = right_stack[0].shape[0]
                 if i == num_carriages-3:
-                    middle_block = build_perturb(b0, input_features, b1)
+                    middle_block = build_perturb(rl, input_features, rr)
                     middle = [*left_stack, middle_block, *right_stack]
-                left_stack.append(build_perturb(b0, input_features, bond_dim))
+                left_stack.append(build_perturb(rl, input_features, bond_dim))
 
             self.pert_nodes = middle
             for i in range(1, num_carriages+1):

@@ -2,36 +2,16 @@
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 import torch
-import numpy as np
 from tensor.bregman import SquareBregFunction
 from tensor.layers import TensorTrainLayer
-from tqdm.auto import tqdm
-from sklearn.preprocessing import MinMaxScaler
 torch.set_default_dtype(torch.float64)
 p = 1
-degree = 5
 def func(x):
-    #return ((1+x)*(x**2)).sum(dim=-1, keepdim=True)
-    #x = x + 0.2
-    # *(x-0.2) * (x+0.8) *(x+0.9) * (x-0.3) * (x-0.1) * (x+0.33) * (x-1.2)
-    f = (np.add(2.0 * x, np.cos(x * 5))).sum(dim=-1, keepdim=True)#(0.2 + (x-0.5) * (x+0.1) * x).sum(dim=-1, keepdim=True) #(100*(-1+x)*(-0.9+x)*(x)*(0.1+x)*(0.8+x)*(0.9+x)-2).sum(dim=-1, keepdim=True)
-    return f + torch.randn_like(f, device=f.device) * 0.1
+    return (100*(-1+x)*(-0.9+x)*(x)*(0.1+x)*(0.8+x)*(0.9+x)-2).sum(dim=-1, keepdim=True)
 
-#coeffs = torch.randn(degree, 1, p)
-# def func(x):
-#     prod = ((x**3).sum(dim=-1, keepdim=True) + coeffs[0])
-#     for i in range(degree-1):
-#         prod = prod * ((x**3).sum(dim=-1, keepdim=True) + coeffs[i+1])*
-#     return prod.sum(-1, keepdim=True)
-
-# def func(x):
-#     prod = (x + coeffs[0])
-#     for i in range(degree-1):
-#         prod = prod * (x + coeffs[i+1])
-#     return prod.sum(dim=-1, keepdim=True)
-torch.manual_seed(41)
-torch.cuda.manual_seed(41)
-x_train = torch.sort((torch.rand(100, p)-0.5)*2, dim=0).values
+torch.manual_seed(42)
+torch.cuda.manual_seed(42)
+x_train = torch.sort((torch.rand(7, p)-0.5)*1.5, dim=0).values
 y_train = func(x_train).cuda()
 x_train = torch.cat((x_train, torch.ones((x_train.shape[0], 1), device=x_train.device)), dim=-1).cuda()
 
@@ -81,18 +61,18 @@ def plot_data(y_pred):
     plt.show()
     plt.close()  # Close the figure to free memory
 #%%
-N = 20
-r = 4
+N = 10
+r = 8
 NUM_SWIPES = 1
 method = 'ridge_cholesky'
-epss = [1e-12]*NUM_SWIPES*2# + np.geomspace(0.5, 0.01, NUM_SWIPES*2).tolist()
+epss = [1e-14]*NUM_SWIPES*2# + np.geomspace(0.5, 0.01, NUM_SWIPES*2).tolist()
 # Define Bregman function
 bf = SquareBregFunction()
 layer = TensorTrainLayer(N, r, x_train.shape[1], output_shape=1, constrict_bond=True, perturb=True, seed=42).cuda()
 
 train_loss_dict = {}
 val_loss_dict = {}
-def convergence_criterion(_, __):
+def convergence_criterion():
     y_pred_train = layer(x_train)
     rmse = torch.sqrt(torch.mean((y_pred_train - y_train)**2))
     print('Train RMSE:', rmse.item())
@@ -103,8 +83,8 @@ def convergence_criterion(_, __):
     plot_data(y_pred_val)
     return False
 
-layer.tensor_network.accumulating_swipe(x_train, y_train, bf, batch_size=512, lr=1.0, eps=epss, eps_r=0.5, convergence_criterion=convergence_criterion, orthonormalize=False, method=method, verbose=2, num_swipes=NUM_SWIPES, skip_second=False, direction='l2r', disable_tqdm=True)
-convergence_criterion(None, None)
+layer.tensor_network.accumulating_swipe(x_train, y_train, bf, batch_size=512, lr=1.0, eps=epss, eps_r=0.5, convergence_criterion=convergence_criterion, orthonormalize=False, method=method, verbose=2, num_swipes=NUM_SWIPES, skip_second=True, direction='l2r', disable_tqdm=True)
+convergence_criterion()
 print("Train:",(y_train.real - layer(x_train).real).square().mean().sqrt())
 print("Val:",(y_val.real - layer(x_val).real).square().mean().sqrt())
 #%%
