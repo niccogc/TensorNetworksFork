@@ -1,12 +1,12 @@
 #%%
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import torch
 import numpy as np
 from tensor.bregman import SquareBregFunction
 from tensor.layers import TensorTrainLayer
 from tqdm.auto import tqdm
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import StandardScaler, QuantileTransformer
 torch.set_default_dtype(torch.float64)
 
 def load_tabular_data(filename, device):
@@ -21,21 +21,37 @@ def load_tabular_data(filename, device):
 
 x_train, y_train, x_val, y_val, x_test, y_test = load_tabular_data('/work3/aveno/Tabular/data/processed/house_tensor.pt', device='cuda')
 
-x_std, x_mean = torch.std_mean(x_train, dim=0, unbiased=False, keepdim=True)
-x_train = (x_train - x_mean) / x_std
-x_test = (x_test - x_mean) / x_std
-x_val = (x_val - x_mean) / x_std
+x_train = x_train.cpu().numpy()
+x_val = x_val.cpu().numpy()
+x_test = x_test.cpu().numpy()
 
-x_min, x_max = x_train.amin(dim=0, keepdim=True), x_train.amax(dim=0, keepdim=True)
+scaler_quant = QuantileTransformer(output_distribution="uniform", subsample=1_000_000, random_state=42)
+x_train = scaler_quant.fit_transform(x_train)
+x_val = scaler_quant.transform(x_val)
+x_test  = scaler_quant.transform(x_test)
 
-eps_val = 1e-2
+# Standardise in any-case
+scaler_standard = StandardScaler()
+x_train = scaler_standard.fit_transform(x_train)
+x_val = scaler_standard.transform(x_val)
+x_test  = scaler_standard.transform(x_test)
 
-x_test_mask = ((x_min <= x_test) & (x_test <= x_max)).all(-1)
-x_val_mask = ((x_min <= x_val) & (x_val <= x_max)).all(-1)
+# Standarwdise y as well
+# First expand y to 2D if needed
+if y_train.ndim == 1:
+    y_train = y_train[:, np.newaxis]
+if y_val.ndim == 1:
+    y_val = y_val[:, np.newaxis]
+if y_test.ndim == 1:
+    y_test = y_test[:, np.newaxis]
+scaler_y = StandardScaler()
+y_train = scaler_y.fit_transform(y_train)
+y_val = scaler_y.transform(y_val)
+y_test = scaler_y.transform(y_test)
 
-# Clamp to min/max
-x_test = torch.clamp(x_test, x_min, x_max)
-x_val = torch.clamp(x_val, x_min, x_max)
+x_train = torch.tensor(x_train, dtype=torch.float64, device='cuda')
+x_val = torch.tensor(x_val, dtype=torch.float64, device='cuda')
+x_test = torch.tensor(x_test, dtype=torch.float64, device='cuda')
 
 x_train = torch.cat((x_train, torch.ones((x_train.shape[0], 1), device=x_train.device)), dim=-1).to(dtype=torch.float64, device='cuda')
 x_test = torch.cat((x_test, torch.ones((x_test.shape[0], 1), device=x_test.device)), dim=-1).to(dtype=torch.float64, device='cuda')
@@ -174,17 +190,17 @@ for fold, (train_idx, val_idx) in enumerate(kf.split(X)):
     X_val_cv, y_val_cv = X[val_idx], y[val_idx]
 
     reg = TensorTrainRegressor(
-        N=3,
-        r=4,
+        N=5,
+        r=16,
         input_dim=X.shape[1],
         output_dim=1,
         seed=42,
         device='cuda',
         verbose=0,
-        num_swipes=4,
+        num_swipes=10,
         perturb=True,
-        eps_start = 5,
-        eps_end = 1e-3
+        eps_start = 1,
+        eps_end = 5e-3
     )
     reg.fit(X_train_cv, y_train_cv)
     
@@ -200,11 +216,14 @@ print(f"Train R2: {train_score:.4f}")
 #%%
 # Try with default degree 3 polynomial fit with L2 regularization
 from sklearn.preprocessing import PolynomialFeatures
-from sklearn.linear_model import Ridge
+from sklearn.linear_model import Ridge, LinearRegression
+
+X = x_train[:,:16].cpu().numpy()
+y = y_train.cpu().numpy()
 
 # Cross validate with polynomial features
-r2_scores_poly = []
-
+r2_scores_poly = [] 
+alpha = 3*1000 # [1e-8, 0.001, 0.01, 0.1, 1, 10, 100, 1000]
 start = time()
 for fold, (train_idx, val_idx) in enumerate(kf.split(X)):
     print(f"Fold {fold + 1}")
@@ -215,7 +234,7 @@ for fold, (train_idx, val_idx) in enumerate(kf.split(X)):
     X_train_poly = poly.fit_transform(X_train_cv)
     X_val_poly = poly.transform(X_val_cv)
 
-    model = Ridge(alpha=1000)
+    model = Ridge(alpha=alpha) if alpha > 0.0 else LinearRegression()
     model.fit(X_train_poly, y_train_cv)
 
     score = r2_score(y_val_cv, model.predict(X_val_poly))
