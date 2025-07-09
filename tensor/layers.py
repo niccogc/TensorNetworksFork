@@ -102,7 +102,7 @@ class NodeLayer(nn.Module):
 class InputNodeLayer(NodeLayer):
     def __init__(self, N, f, label='p', dtype=None):
         """Creates the input nodes for the layer."""
-        super(NodeLayer, self).__init__(N, (1, f), ['s', label], name='X{0}', dtype=dtype)
+        super(InputNodeLayer, self).__init__(N, (1, f), ['s', label], name='X{0}', dtype=dtype)
 
 class TensorNetworkLayer(nn.Module):
     def __init__(self, tensor_network: TensorNetwork = None):
@@ -131,10 +131,10 @@ class TensorNetworkLayer(nn.Module):
         """Loads the state dictionary into the nodes."""
         for i, node in enumerate(self.tensor_network.train_nodes):
             if f"tensor_param_{i}" in tensor_params:
-                if not set_value:
-                    node.tensor.data.copy_(tensor_params[f"tensor_param_{i}"].detach().clone())
-                else:
+                if set_value:
                     node.tensor = tensor_params[f"tensor_param_{i}"]
+                else:
+                    node.tensor.data.copy_(tensor_params[f"tensor_param_{i}"].detach().clone())
             else:
                 raise ValueError(f"Missing parameter: tensor_param_{i}")
         
@@ -212,19 +212,71 @@ class TensorTrainLayer(TensorNetworkLayer):
         self.set_tensor_network(tensor_network)
 
 class TensorTrainNN(TensorTrainLayer):
-    def __init__(self, input_features, output_shape, N=3, r=8, squeeze=True, constrict_bond=True, perturb=False, dtype=None, seed=None)
+    def __init__(self, input_features, output_shape, N=3, r=8, squeeze=True, constrict_bond=True, perturb=False, dtype=None, seed=None, natural_gradient=True):
         """Initializes a TensorTrainNN."""
         super(TensorTrainNN, self).__init__(
-            num_carriages=N, bond_dim=r, input_features=input_features,
+            num_carriages=N, bond_dim=r, input_features=input_features+1,
             output_shape=output_shape, squeeze=squeeze, constrict_bond=constrict_bond,
             perturb=perturb, dtype=dtype, seed=seed
         )
-        # TODO: Add parameters from TensorNetwork here.
+        self._parameters = nn.ParameterDict()
+        for i, node in enumerate(self.tensor_network.train_nodes):
+            self._parameters[f'tensor_node_{i}'] = nn.Parameter(node.tensor, requires_grad=not natural_gradient)
+            node.tensor = self._parameters[f'tensor_node_{i}']
+        self.node_state_dict = self.node_states(detach=False)
+
+        self._natural_gradient = natural_gradient
+        self._cur_block_idx = 0
+        self._method = "exact"
+        self._eps = 1e-12
+    
+    def get_gradient(self, node, d_loss, sqd_loss):
+        A, b_vec = self.tensor_network.get_A_b(node, d_loss, sqd_loss)
+        step_tensor = self.tensor_network.solve_system(node, A, b_vec, method=self._method, eps=self._eps)
+        return step_tensor
+    
+    def forward(self, x):
+        self.load_node_states(self.node_state_dict, set_value=True)
+
+        # Pad x with ones for the bias term
+        x = torch.cat((x, torch.ones_like(x[..., :1])), dim=-1)
+
+        out = self.tensor_network.forward(x)
+        if self.labels is not None:
+            out.permute_first(*self.labels)
+        out = out.tensor
+
+        if not self._natural_gradient:
+            return out
+
+        out = out.requires_grad_(True)
+        hook_handle = None
+        def _hook(d_loss):
+            nonlocal hook_handle
+            hook_handle.remove()
+            B = []
+            for i in range(d_loss.shape[-1]):
+                # grad of each output‐feature slice
+                g2 = torch.autograd.grad(
+                    outputs=d_loss[..., i].sum(),
+                    inputs=out,
+                    retain_graph=True,
+                    create_graph=False
+                )[0]
+                B.append(g2.unsqueeze(-2))
+            sqd_loss = torch.cat(B, dim=-2)
+
+            for i, n in enumerate(self.tensor_network.train_nodes):
+                p = self._parameters[f'tensor_node_{i}']
+                p.grad = self.get_gradient(n, d_loss, sqd_loss)
+
+            # 3) pass the gradient on unchanged
+            return d_loss
+
+        hook_handle = out.register_hook(_hook)
+        return out
 
 class TensorTrainLinearLayer(TensorNetworkLayer):
-    #def __init__(self, num_carriages, bond_dim, input_features, output_shape=tuple(), squeeze=True, constrict_bond=True, perturb=False, dtype=None, seed=None):
-    #def __init__(self, num_carriages, bond_dim, input_features, linear_dim, linear_bond=1,
-    #        output_shape=tuple(), ring=False, squeeze=True, connect_linear=False):
     def __init__(self, num_carriages, bond_dim, input_features, linear_dim, output_shape=tuple(), squeeze=True, constrict_bond=True, perturb=False, dtype=None, seed=None):
         """Initializes a TensorTrainLinearLayer."""
         super(TensorTrainLinearLayer, self).__init__()
@@ -240,7 +292,7 @@ class TensorTrainLinearLayer(TensorNetworkLayer):
 
         self.main_node_layer = MainNodeLayer(
             num_carriages, bond_dim, linear_dim, output_shape=output_shape,
-            down_label='lin{0}', constrict_bond=True, perturb=False, dtype=dtype
+            down_label='lin{0}', constrict_bond=constrict_bond, perturb=perturb, dtype=dtype
         )
         self.horizontal_connect(self.main_node_layer.nodes)
         self.linear_layer = NodeLayer(
