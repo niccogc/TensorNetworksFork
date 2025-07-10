@@ -211,6 +211,22 @@ class TensorTrainLayer(TensorNetworkLayer):
         tensor_network = TensorNetwork(self.input_node_layer.nodes, self.main_node_layer.nodes, output_labels=self.main_node_layer.labels)
         self.set_tensor_network(tensor_network)
 
+def tensor_network_update(module):
+    if isinstance(module, TensorTrainNN):
+        node = module.tensor_network.train_nodes[module._cur_block_idx]
+        step_tensor = module.tensor_network.solve_system(node, module._A_cur, module._b_cur, method=module._method, eps=module._eps)
+        with torch.no_grad():
+            p = module._parameters[f'tensor_node_{module._cur_block_idx}']
+            p.copy_(p + step_tensor)
+        module._cur_block_idx += 1
+        module._A_cur = None
+        module._b_cur = None
+        if module._cur_block_idx >= len(module.tensor_network.train_nodes):
+            module._cur_block_idx = 0
+            module._eps = max(module._eps * 0.7, 4e-4)
+            module._lmb = min(1 - (1 - module._lmb) * 0.8, 0.95)
+            print(f"Updated parameters for all nodes, new eps: {module._eps}, new lmb: {module._lmb}")
+
 class TensorTrainNN(TensorTrainLayer):
     def __init__(self, input_features, output_shape, N=3, r=8, squeeze=True, constrict_bond=True, perturb=False, dtype=None, seed=None, natural_gradient=True):
         """Initializes a TensorTrainNN."""
@@ -227,13 +243,20 @@ class TensorTrainNN(TensorTrainLayer):
 
         self._natural_gradient = natural_gradient
         self._cur_block_idx = 0
-        self._method = "exact"
-        self._eps = 1e-12
+        self._method = "ridge_cholesky"
+        self._eps = 1e-2
+        self._lmb = 0.9
+        self._A_cur = None
+        self._b_cur = None
     
-    def get_gradient(self, node, d_loss, sqd_loss):
+    def accumulate_gradient(self, node, d_loss, sqd_loss, lmb=0.9):
         A, b_vec = self.tensor_network.get_A_b(node, d_loss, sqd_loss)
-        step_tensor = self.tensor_network.solve_system(node, A, b_vec, method=self._method, eps=self._eps)
-        return step_tensor
+        if self._A_cur is None or self._b_cur is None:
+            self._A_cur = A
+            self._b_cur = b_vec
+        else:
+            self._A_cur = lmb * self._A_cur + (1 - lmb) * A
+            self._b_cur = lmb * self._b_cur + (1 - lmb) * b_vec
     
     def forward(self, x):
         self.load_node_states(self.node_state_dict, set_value=True)
@@ -256,7 +279,6 @@ class TensorTrainNN(TensorTrainLayer):
             hook_handle.remove()
             B = []
             for i in range(d_loss.shape[-1]):
-                # grad of each output‐feature slice
                 g2 = torch.autograd.grad(
                     outputs=d_loss[..., i].sum(),
                     inputs=out,
@@ -266,11 +288,9 @@ class TensorTrainNN(TensorTrainLayer):
                 B.append(g2.unsqueeze(-2))
             sqd_loss = torch.cat(B, dim=-2)
 
-            for i, n in enumerate(self.tensor_network.train_nodes):
-                p = self._parameters[f'tensor_node_{i}']
-                p.grad = self.get_gradient(n, d_loss, sqd_loss)
+            node = self.tensor_network.train_nodes[self._cur_block_idx]
+            self.accumulate_gradient(node, d_loss, sqd_loss, lmb=self._lmb)
 
-            # 3) pass the gradient on unchanged
             return d_loss
 
         hook_handle = out.register_hook(_hook)
