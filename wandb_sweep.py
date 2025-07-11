@@ -116,6 +116,7 @@ if __name__ == "__main__":
     parser.add_argument("--project_name", type=str, default="house_sweeps", help="W&B project name")
     parser.add_argument("--entity", type=str, default="tensorGang", help="W&B entity name")
     parser.add_argument("--sweep_id", type=str, default=None, help="W&B sweep ID to resume")
+    parser.add_argument("--start_sweep_only", action='store_true', help="Only start the sweep without running the agent")
     args = parser.parse_args()
 
 
@@ -171,6 +172,8 @@ if __name__ == "__main__":
     else:
         sweep_id = args.sweep_id
         print("Adding agent to existing sweep with ID:", sweep_id)
+    if args.start_sweep_only:
+        exit(0)
 
     main = partial(main, project_name=args.project_name, entity=args.entity)
 
