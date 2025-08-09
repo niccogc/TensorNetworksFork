@@ -211,6 +211,22 @@ class TensorTrainLayer(TensorNetworkLayer):
         tensor_network = TensorNetwork(self.input_node_layer.nodes, self.main_node_layer.nodes, output_labels=self.main_node_layer.labels)
         self.set_tensor_network(tensor_network)
 
+def tensor_network_update(module):
+    if isinstance(module, TensorTrainNN):
+        node = module.tensor_network.train_nodes[module._cur_block_idx]
+        step_tensor = module.tensor_network.solve_system(node, module._A_cur, module._b_cur, method=module._method, eps=module._eps)
+        with torch.no_grad():
+            p = module._parameters[f'tensor_node_{module._cur_block_idx}']
+            p.copy_(p + step_tensor)
+        module._cur_block_idx += 1
+        module._A_cur = None
+        module._b_cur = None
+        if module._cur_block_idx >= len(module.tensor_network.train_nodes):
+            module._cur_block_idx = 0
+            module._eps = max(module._eps * 0.7, 4e-4)
+            module._lmb = min(1 - (1 - module._lmb) * 0.8, 0.95)
+            print(f"Updated parameters for all nodes, new eps: {module._eps}, new lmb: {module._lmb}")
+
 class TensorTrainNN(TensorTrainLayer):
     def __init__(self, input_features, output_shape, N=3, r=8, squeeze=True, constrict_bond=True, perturb=False, dtype=None, seed=None, natural_gradient=True):
         """Initializes a TensorTrainNN."""
@@ -227,13 +243,20 @@ class TensorTrainNN(TensorTrainLayer):
 
         self._natural_gradient = natural_gradient
         self._cur_block_idx = 0
-        self._method = "exact"
-        self._eps = 1e-12
+        self._method = "ridge_cholesky"
+        self._eps = 1e-2
+        self._lmb = 0.9
+        self._A_cur = None
+        self._b_cur = None
     
-    def get_gradient(self, node, d_loss, sqd_loss):
+    def accumulate_gradient(self, node, d_loss, sqd_loss, lmb=0.9):
         A, b_vec = self.tensor_network.get_A_b(node, d_loss, sqd_loss)
-        step_tensor = self.tensor_network.solve_system(node, A, b_vec, method=self._method, eps=self._eps)
-        return step_tensor
+        if self._A_cur is None or self._b_cur is None:
+            self._A_cur = A
+            self._b_cur = b_vec
+        else:
+            self._A_cur = lmb * self._A_cur + (1 - lmb) * A
+            self._b_cur = lmb * self._b_cur + (1 - lmb) * b_vec
     
     def forward(self, x):
         self.load_node_states(self.node_state_dict, set_value=True)
@@ -256,7 +279,6 @@ class TensorTrainNN(TensorTrainLayer):
             hook_handle.remove()
             B = []
             for i in range(d_loss.shape[-1]):
-                # grad of each output‐feature slice
                 g2 = torch.autograd.grad(
                     outputs=d_loss[..., i].sum(),
                     inputs=out,
@@ -266,11 +288,9 @@ class TensorTrainNN(TensorTrainLayer):
                 B.append(g2.unsqueeze(-2))
             sqd_loss = torch.cat(B, dim=-2)
 
-            for i, n in enumerate(self.tensor_network.train_nodes):
-                p = self._parameters[f'tensor_node_{i}']
-                p.grad = self.get_gradient(n, d_loss, sqd_loss)
+            node = self.tensor_network.train_nodes[self._cur_block_idx]
+            self.accumulate_gradient(node, d_loss, sqd_loss, lmb=self._lmb)
 
-            # 3) pass the gradient on unchanged
             return d_loss
 
         hook_handle = out.register_hook(_hook)
@@ -298,15 +318,17 @@ class TensorTrainLinearLayer(TensorNetworkLayer):
         self.linear_layer = NodeLayer(
             num_carriages, (linear_dim, input_features), labels=('lin{0}', 'p{0}'), dtype=dtype
         )
-        self.zip_connect(self.linear_layer.nodes, self.main_node_layer.nodes, label='lin{0}')
+        self.zip_connect(self.main_node_layer.nodes, self.linear_layer.nodes, label='lin{0}')
         self.input_node_layer = InputNodeLayer(num_carriages, input_features, label='p{0}', dtype=dtype)
-        self.zip_connect(self.input_node_layer.nodes, self.linear_layer.nodes, label='p{0}')
+        self.zip_connect(self.linear_layer.nodes, self.input_node_layer.nodes, label='p{0}')
         if squeeze:
             for node in self.main_node_layer.nodes:
                 node.squeeze(self.main_node_layer.labels)
         # Create a TensorNetwork (interleaving nodes, such that)
         tensor_network = TensorNetwork(
-            self.input_node_layer.nodes, [n for column in zip(self.main_node_layer.nodes, self.linear_layer.nodes) for n in column],
+            self.input_node_layer.nodes,
+            main_nodes=self.main_node_layer.nodes,
+            train_nodes=[n for column in zip(self.main_node_layer.nodes, self.linear_layer.nodes) for n in column],
             output_labels=self.main_node_layer.labels
         )
         self.set_tensor_network(tensor_network)
@@ -993,121 +1015,6 @@ class CPD(TensorNetworkLayer):
         # Create a TensorNetwork
         tensor_network = TensorNetwork(self.x_nodes, self.nodes, output_labels=self.labels)
         super(CPD, self).__init__(tensor_network)
-
-class TensorTrainLinearLayer(TensorNetworkLayer):
-    def __init__(self, num_carriages, bond_dim, input_features, linear_dim, linear_bond=1,
-                 output_shape=tuple(), ring=False, squeeze=True, connect_linear=False):
-        """Initializes a TensorTrainLinearLayer with an intermediate linear block."""
-        self.num_carriages = num_carriages
-        self.bond_dim = bond_dim
-        self.input_features = input_features
-        self.linear_dim = linear_dim
-        self.linear_bond = linear_bond
-        self.output_shape = output_shape if isinstance(output_shape, tuple) else (output_shape,)
-        self.ring = ring
-        self.connect_linear = connect_linear
-
-        # create input nodes
-        self.x_nodes = []
-        for i in range(1, num_carriages+1):
-            x = TensorNode((1, input_features), ['s', 'p'], name=f"X{i}")
-            self.x_nodes.append(x)
-
-        # build linear and train blocks
-        self.linear_blocks = []
-        self.train_blocks = []
-        self.nodes = []  # main nodes are train blocks
-        self.labels = ['s']
-        self.train_nodes = []
-        def build_left(b0, f, R, right=0):
-            mx = min(R, b0*f)
-            if right != 0:
-                mx = right
-            return (b0, mx)
-
-        def build_right(R, f, b1, left=0):
-            mx = min(R, b1*f)
-            if left != 0:
-                mx = left
-            return (mx, b1)
-
-        b0 = build_left(1, input_features, bond_dim)
-        bn = build_right(bond_dim, input_features, 1)
-        left_stack = [b0]
-        right_stack = [bn]
-        middle = [b0, bn]
-        for i in range(num_carriages-2):
-            b0 = left_stack[-1][1]
-            b1 = right_stack[0][0]
-            if i == num_carriages-3:
-                middle_block = (b0, b1)
-                middle = [*left_stack, middle_block, *right_stack]
-            if i % 2 == 0:
-                left_stack.append(build_left(b0, input_features, bond_dim))
-            else:
-                right_stack.insert(0, build_right(bond_dim, input_features, b1))
-        self.ranks = middle
-        for i in range(1, num_carriages+1):
-            # linear block shape/labels
-            if self.connect_linear:
-                shape_lin = (linear_bond if i != 1 else 1, input_features, linear_dim, linear_bond if i != num_carriages else 1)
-                labels_lin = [f'l{i}', 'p', 'm', f'l{i+1}']
-                lin = TensorNode(shape_lin, labels_lin, l=f'l{i}', r=f'l{i+1}', name=f"L{i}")
-            else:
-                shape_lin = (input_features, linear_dim)
-                labels_lin = ['p', 'm']
-                lin = TensorNode(shape_lin, labels_lin, name=f"L{i}")
-            self.train_nodes.append(lin)
-
-            # Connect x_node to linear block explicitly
-            self.x_nodes[i-1].connect(lin, 'p', priority=2)
-
-            # optional connect between linear blocks
-            if self.connect_linear and i>1:
-                self.linear_blocks[-1].connect(lin, f'l{i}', priority=1)
-            self.linear_blocks.append(lin)
-
-            # prepare train block
-            # output dims
-            if i-1 < len(self.output_shape):
-                up = self.output_shape[i-1]
-                up_label = f'c{i}'
-                self.labels.append(up_label)
-            else:
-                up = 1
-                up_label = 'c'
-            # bond dims
-            left_label = 'rr' if ring and i==1 else f'r{i}'
-            right_label = 'rr' if ring and i==num_carriages else f'r{i+1}'
-            left, right = self.ranks[i-1]
-            # create and connect train node
-            tr = TensorNode((left, up, linear_dim, right),
-                            [left_label, up_label, 'm', right_label],
-                            l=left_label, r=right_label, name=f"A{i}")
-            self.train_nodes.append(tr)
-
-            # Connect linear block to train block explicitly
-            tr.connect(lin, 'm', priority=2)
-
-            if i>1:
-                self.train_blocks[-1].connect(tr, left_label, priority=1)
-            if ring and i==num_carriages:
-                tr.connect(self.train_blocks[0], right_label, priority=0)
-            self.train_blocks.append(tr)
-            self.nodes.append(tr)
-
-        # squeeze singleton dims
-        if squeeze:
-            for node in self.linear_blocks + self.nodes:
-                node.squeeze(self.labels)
-
-        # build tensor network including linear and train as train_nodes
-        tensor_network = TensorNetwork(
-            self.x_nodes, self.nodes,
-            train_nodes=self.train_nodes,
-            output_labels=self.labels
-        )
-        super(TensorTrainLinearLayer, self).__init__(tensor_network)
 
 class TensorTrainSplitInputLayer(TensorNetworkLayer):
     def __init__(self, num_wagons, bond_dim, input_shape=tuple(), output_shape=tuple(), axle_bond=1):

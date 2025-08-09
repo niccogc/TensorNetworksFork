@@ -6,11 +6,9 @@ class BregFunction(torch.nn.Module):
     def transform_forward(self, x, y):
         return x, y
 
-    def forward(self, x, y, only_loss=False):
+    def forward(self, x, y):
         x, y = self.transform_forward(x, y)
         loss = self.psi(x) - self.psi(y) - self.prod(self.d(y), x-y)
-        if only_loss:
-            return loss
         d_loss = self.grad(x, y)
         sqd_loss = self.hess(x, y)
         return loss, d_loss, sqd_loss

@@ -1,4 +1,6 @@
 #%%
+import os
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 import numpy as np
 import sklearn.preprocessing as skpp
 import sklearn.datasets as skds
@@ -32,35 +34,35 @@ X_train = X_quant.fit_transform(X_train)
 X_val = X_quant.transform(X_val)
 #%%
 import torch
-from tensor.layers import TensorTrainNN
+from tensor.layers import TensorTrainNN, tensor_network_update
 from sklearn.metrics import root_mean_squared_error, r2_score
 
 MLP = torch.nn.Sequential(
-    #TensorTrainNN(X_train.shape[1], 64, N=4, r=12, perturb=True, natural_gradient=False),
     torch.nn.Linear(X_train.shape[1], 64),
-    torch.nn.ReLU(),
-    #TensorTrainNN(64, 32, N=4, r=12, perturb=True, natural_gradient=False),
-    torch.nn.Linear(64, 32),
-    torch.nn.ReLU(),
-    #TensorTrainNN(32, 1, N=4, r=12, perturb=True, natural_gradient=False),
-    torch.nn.Linear(32, 1)
+    #torch.nn.ReLU(),
+    #torch.nn.Linear(64, 32),
+    #torch.nn.ReLU(),
+    torch.nn.Sigmoid(),
+    TensorTrainNN(64, 32, N=10, r=16, perturb=True, natural_gradient=False),
+    torch.nn.Linear(32, y_train.shape[1]),
 ).cuda()
 
 batch_size = 512
-opt = torch.optim.Adam(MLP.parameters(), lr=4e-3)
+opt = torch.optim.Adam(MLP.parameters(), lr=1e-3)
 MLP.zero_grad(set_to_none=True)
 for epoch in range(100):
+    # Random perm
+    perm = torch.randperm(len(X_train))
     for i in range(0, len(X_train), batch_size):
-        x_batch = torch.tensor(X_train[i:i+batch_size], dtype=torch.float32).cuda()
-        y_batch = torch.tensor(y_train[i:i+batch_size], dtype=torch.float32).cuda()
+        x_batch = torch.tensor(X_train[perm[i:i+batch_size]], dtype=torch.float32).cuda()
+        y_batch = torch.tensor(y_train[perm[i:i+batch_size]], dtype=torch.float32).cuda()
 
-        opt.zero_grad(set_to_none=True)
         y_pred = MLP(x_batch)
         loss = torch.nn.functional.mse_loss(y_pred, y_batch)
-        loss.backward() #create_graph=False, retain_graph=False
+        loss.backward(create_graph=True, retain_graph=True)
         opt.step()
         MLP.zero_grad(set_to_none=True)
-
+    #MLP.apply(tensor_network_update)
     # Validation
     with torch.no_grad():
         x_val_tensor = torch.tensor(X_val, dtype=torch.float32).cuda()
@@ -68,5 +70,5 @@ for epoch in range(100):
         y_val_pred = MLP(x_val_tensor)
         val_loss = root_mean_squared_error(y_val_tensor.cpu().numpy(), y_val_pred.cpu().numpy())
         r2 = r2_score(y_val_tensor.cpu().numpy(), y_val_pred.cpu().numpy())
-        print(f"Epoch {epoch+1}, Validation Loss: {val_loss:.4f}, R2: {r2:.4f}")
+        print(f"Epoch {epoch+1}, Validation: RMSE: {val_loss:.4f}, R2: {r2:.4f}")
 #%%

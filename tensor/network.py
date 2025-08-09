@@ -166,10 +166,7 @@ class TensorNetwork:
         J = self.compute_jacobian_stack(node).expand_labels(self.output_labels, grad.shape).permute_first(*broadcast_dims)
 
         # Assign unique einsum labels
-        all_letters = iter(string.ascii_letters)
-        dim_labels = {dim: next(all_letters) for dim in self.output_labels}  # Assign letters to output dims
-        for d in non_broadcast_dims:
-            dim_labels['_' + d] = next(all_letters)
+        dim_labels = EinsumLabeler()
 
         dd_loss_ein = ''.join([dim_labels[self.sample_dim]] + [dim_labels[d] for d in non_broadcast_dims] + [dim_labels['_' + d] for d in non_broadcast_dims])
         d_loss_ein = ''.join(dim_labels[d] for d in self.output_labels)
@@ -180,16 +177,12 @@ class TensorNetwork:
         J_out2 = []
         dim_order = []
         for d in J.dim_labels:
-            if d not in dim_labels and d not in broadcast_dims:
-                dim_labels[d] = next(all_letters)
-                dim_labels['_' + d] = next(all_letters)
             J_ein1 += dim_labels[d]
             J_ein2 += dim_labels['_' + d] if d != self.sample_dim else dim_labels[d]
             if d not in broadcast_dims:
                 J_out1.append(dim_labels[d])
                 J_out2.append(dim_labels['_' + d])
                 dim_order.append(d)
-
         J_out1 = ''.join([J_out1[dim_order.index(d)] for d in node.dim_labels])
         J_out2 = ''.join([J_out2[dim_order.index(d)] for d in node.dim_labels])
 
