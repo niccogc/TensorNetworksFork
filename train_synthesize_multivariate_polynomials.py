@@ -1,6 +1,6 @@
 #%%
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 import torch
 torch.set_default_dtype(torch.float64)
 import numpy as np
@@ -142,9 +142,9 @@ def evaluate_poly(X, coeffs, poly):
 
 def get_data(d, degree, num_train_points, num_val_points, num_test_points, random_state=42):
     rng = np.random.default_rng(random_state)
-    X_train = rng.uniform(-1, 1, (num_train_points, d))
-    X_val = rng.uniform(-1, 1, (num_val_points, d))
-    X_test = rng.uniform(-1, 1, (num_test_points, d))
+    X_train = rng.uniform(-2, 2, (num_train_points, d))
+    X_val = rng.uniform(-2, 2, (num_val_points, d))
+    X_test = rng.uniform(-2, 2, (num_test_points, d))
 
     poly = RandomPolynomial(
         d=d,
@@ -175,7 +175,8 @@ def evaluate_tensor_train(
     max_degree,      # formerly "carriages"
     rank,
     split_train=False,
-    random_state=42
+    random_state=42,
+    verbose=0
 ):
     if max_degree > 2:
         tt = TensorTrainRegressorEarlyStopping(
@@ -195,7 +196,7 @@ def evaluate_tensor_train(
             bf=SquareBregFunction(),
             lr=1.0,
             method='ridge_cholesky',
-            verbose=2
+            verbose=verbose
         )
         try:
             # pass validation data into fit()
@@ -308,7 +309,8 @@ def evaluate_model(
         max_degree=max_degree,
         rank=tt_rank,
         split_train=False,
-        random_state=random_state
+        random_state=random_state,
+        verbose=verbose
     )
     torch.cuda.synchronize()
     tt_time = time.time() - t0
@@ -351,7 +353,7 @@ def evaluate_model(
     num_train_points=1000,
     num_val_points=300,
     num_test_points=1000,
-    max_degree=30,
+    max_degree=8,
     tt_rank=25,
     abs_err=1e-5,
     rel_err=1e-4,
@@ -365,71 +367,58 @@ print("Polynomial Regression Results:")
 print(f"R2: {poly_r2:.4f}, RMSE: {poly_rmse:.4f}, Degree: {poly_degree}, Time: {poly_time:.2f}s")
 #%%
 from tqdm import tqdm
-ds = [1, 2, 4, 8, 16]
-data_degrees = [1, 2, 3, 4, 5, 6, 7, 10, 15, 20]
+ds = [1, 2, 4, 8, 12]
+data_degrees = [1, 2, 3, 4, 5, 6, 7, 10]
+ranks = [3, 9, 27]
+seeds = list(range(42, 52))  # 10 different seeds for robustness
 results = [] #pairs for pandas df
+# data_dim, data_degree, seed,
+# tt_r2, tt_rmse, tt_degree, tt_time, tt_rank,
+# poly_r2, poly_rmse, poly_degree, poly_time
+
+tbar = tqdm(total=len(ds) * len(data_degrees) * len(seeds) * len(ranks), desc="Evaluating models")
+for d in ds:
+    for data_degree in data_degrees:
+        for rank in ranks:
+            for seed in seeds:
+                tbar.set_description(f"Evaluating d={d}, degree={data_degree}, seed={seed}, rank={rank}")
+                (
+                    X_train, y_train,
+                    X_val, y_val,
+                    X_test, y_test,
+                    tt_r2, tt_rmse, tt_singular, tt_model, tt_degree, tt_time,
+                    poly_r2, poly_rmse, poly_model, poly_coeffs, poly_degree, poly_time
+                ) = evaluate_model(
+                    d=d,
+                    data_degree=data_degree,
+                    num_train_points=10000,
+                    num_val_points=3000,
+                    num_test_points=10000,
+                    max_degree=15,
+                    tt_rank=rank,
+                    abs_err=1e-5,
+                    rel_err=1e-4,
+                    early_stopping=5,
+                    verbose=0,
+                    random_state=seed
+                )
+                
+                tbar.set_postfix({
+                    'tt_r2': tt_r2,
+                    'tt_rmse': tt_rmse,
+                    'tt_degree': tt_degree,
+                    'tt_time': tt_time,
+                    'poly_r2': poly_r2,
+                    'poly_rmse': poly_rmse,
+                    'poly_degree': poly_degree,
+                    'poly_time': poly_time
+                })
+                tbar.update(1)
+
+                results.append((
+                    d, data_degree, seed,
+                    tt_r2, tt_rmse, tt_degree, tt_time, rank,
+                    poly_r2, poly_rmse, poly_degree, poly_time
+                ))
+
 #%%
-from matplotlib import pyplot as plt
-
-def plot_true_and_predicted(X_val: np.ndarray, y_val: np.ndarray, poly: RandomPolynomial, model, polynomial: PolynomialFeatures, poly_coeffs: np.ndarray,
-                            d: int, resolution: int = 200):
-    """
-    Plot the true and predicted polynomial surface (only supports d = 1 or 2).
-    """
-    if d == 1:
-        x = np.linspace(-1, 1, resolution).reshape(-1, 1)
-        y_true = poly.evaluate(x)
-        y_pred = model.predict(x)
-        y_poly_pred = evaluate_poly(x, poly_coeffs, polynomial)
-
-        plt.figure(figsize=(6, 4))
-        plt.plot(x, y_true, label="True", linewidth=2)
-        plt.plot(x, y_pred, label="Predicted", linestyle='--')
-        plt.plot(x, y_poly_pred, label="Polynomial Fit", linestyle=':')
-        plt.scatter(X_val, y_val, marker='*', color='black', s=20, label="Validation Data", zorder=5)
-        plt.xlabel("x")
-        plt.ylabel("y")
-        plt.title("1D Polynomial vs Prediction")
-        plt.grid(True)
-        plt.legend()
-        plt.tight_layout()
-        plt.show()
-
-    elif d == 2:
-        x1 = np.linspace(-1, 1, resolution)
-        x2 = np.linspace(-1, 1, resolution)
-        X1, X2 = np.meshgrid(x1, x2)
-        X_grid = np.stack([X1.ravel(), X2.ravel()], axis=1)
-
-        y_true = poly.evaluate(X_grid).reshape(resolution, resolution)
-        y_pred = model.predict(X_grid).reshape(resolution, resolution)
-
-        # True surface
-        fig = plt.figure(figsize=(12, 5))
-        ax1 = fig.add_subplot(1, 2, 1, projection='3d')
-        ax1.plot_surface(X1, X2, y_true, cmap='viridis', edgecolor='none')
-        ax1.set_title("True Polynomial Surface")
-        ax1.set_xlabel('x1')
-        ax1.set_ylabel('x2')
-        ax1.set_zlabel('y')
-
-        # Predicted surface with another colormap
-        ax2 = fig.add_subplot(1, 2, 2, projection='3d')
-        ax2.plot_surface(X1, X2, y_pred, cmap='viridis', edgecolor='none')
-        ax2.set_title("Predicted Surface (Model)")
-        ax2.set_xlabel('x1')
-        ax2.set_ylabel('x2')
-        ax2.set_zlabel('y')
-
-        plt.tight_layout()
-        plt.show()
-
-    else:
-        raise ValueError("Only d = 1 or 2 is supported for plotting.")
-if d < 3:
-    plot_true_and_predicted(X_train, y_train, poly, tensor_train, polynomial, coeffs, d=d, resolution=200)
-#%%
-
-
-####### FORGET THIS
-# We need to measure the time it takes to train instead...
