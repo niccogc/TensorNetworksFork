@@ -34,7 +34,7 @@ class RandomPolynomial:
         degree: int,
         sigma0: float = 0.2,
         r: float = 1.0,
-        mask: float = 0.0,
+        mask: float = 0.1,
         include_bias: bool = True,
         interaction_only: bool = False,
         random_state = None,
@@ -109,50 +109,73 @@ class RandomPolynomial:
         """
         Phi = self.design_matrix(x)         # (B, n_features)
         return Phi.dot(self.coeffs_)        # (B,)
-
-def fit_poly_mononomial(X, y, degree, include_bias=True):
-    """
-    X_train: Numpy array of shape (B, d)
-    y: Numpy array of shape (B,1)
-    degree: total degree (int)
-    """
-    poly = PolynomialFeatures(degree=degree, include_bias=include_bias)
-    Phi = poly.fit_transform(X)          # (B, n_terms)
-    y = y.reshape(-1, 1)
-
-    Phi = torch.tensor(Phi, dtype=torch.float64, device='cuda')
-    y = torch.tensor(y, dtype=torch.float64, device='cuda')
-    coeffs = torch.linalg.lstsq(Phi, y).solution  # (n_terms, 1)
     
-    coeffs = coeffs.cpu().numpy()  # convert to numpy array
+class RandomPolynomialRange:
+    def __init__(self, d, degree, input_range=(-1, 1), random_state=None):
+        self.d = d
+        self.degree = degree
+        self.range_start, self.range_end = input_range
 
-    return poly, coeffs
+        if random_state is None:
+            self.rng = np.random.default_rng()
+        else:
+            self.rng = np.random.default_rng(random_state)
 
-def evaluate_poly(X, coeffs, poly):
-    """
-    Evaluate the polynomial with coefficients coeffs at X.
+        self.C = self.rng.normal(
+            loc=0.0,
+            scale=1.0,
+            size=(self.d,)
+        )
+        self.C = np.exp(self.C - np.max(self.C))
+        self.C /= np.sum(self.C)
+        self.roots = self.rng.uniform(
+            low=self.range_start,
+            high=self.range_end,
+            size=(self.degree,)
+        )
 
-    X: Numpy array of shape (B, d)
-    coeffs: Numpy array of shape (n_terms, 1)
-    poly: PolynomialFeatures instance used to generate coeffs
-    """
-    Phi = poly.transform(X)          # (B, n_terms)
-    y_pred = Phi.dot(coeffs)         # (B, 1)
-    return y_pred
+    def evaluate(self, x):
+        """
+        Evaluate the polynomial at x.
+
+        x: (B, d) array
+        returns y: (B,) array
+        """
+        x = np.asarray(x)
+        if x.ndim != 2 or x.shape[1] != self.d:
+            raise ValueError(f"x must be shape (B, {self.d})")
+        
+        t = np.dot(x, self.C)  # (B,) weighted sum of inputs
+
+        # Output is a polynomial of t with roots at self.roots
+        # Calculate distance to each root
+        dist = (t[:, None] - self.roots[None, :])  # (B, degree)
+        # Multiply by (t - root) for each root
+        y = np.prod(dist, axis=1)  # (B,) product over roots
+        
+        return y
+
+
 
 def get_data(d, degree, num_train_points, num_val_points, num_test_points, random_state=42):
     rng = np.random.default_rng(random_state)
-    X_train = rng.uniform(-2, 2, (num_train_points, d))
-    X_val = rng.uniform(-2, 2, (num_val_points, d))
-    X_test = rng.uniform(-2, 2, (num_test_points, d))
+    X_train = rng.uniform(-1, 1, size=(num_train_points, d))
+    X_val = rng.uniform(-1, 1, size=(num_val_points, d))
+    X_test = rng.uniform(-1, 1, size=(num_test_points, d))
 
-    poly = RandomPolynomial(
+    # poly = RandomPolynomial(
+    #     d=d,
+    #     degree=degree,
+    #     sigma0=0.02,
+    #     r=1,
+    #     include_bias=True,
+    #     interaction_only=False,
+    #     random_state=random_state
+    # )
+    poly = RandomPolynomialRange(
         d=d,
         degree=degree,
-        sigma0=0.02,
-        r=1,
-        include_bias=True,
-        interaction_only=False,
+        input_range=(-1, 1),
         random_state=random_state
     )
     y_train = poly.evaluate(X_train)
@@ -174,13 +197,14 @@ def evaluate_tensor_train(
     X_test, y_test,
     max_degree,      # formerly "carriages"
     rank,
+    early_stopping=5,
     split_train=False,
     random_state=42,
     verbose=0
 ):
     if max_degree > 2:
         tt = TensorTrainRegressorEarlyStopping(
-            early_stopping=5,
+            early_stopping=early_stopping,
             rel_err=1e-4,
             abs_err=1e-6,
             validation_split=0.2,
@@ -210,14 +234,48 @@ def evaluate_tensor_train(
         r2_test = r2_score(y_test, y_pred_test)
         rmse_test = root_mean_squared_error(y_test, y_pred_test)
         best_degree = tt._best_degree
+        num_params = sum(p.tensor.numel() for i, p in enumerate(tt._model.tensor_network.train_nodes) if i < tt._best_degree)
     else:
         tt = None
         singular = True
         best_degree = np.nan
         r2_test = np.nan
         rmse_test = np.nan
+        num_params = None
 
-    return r2_test, rmse_test, singular, tt, best_degree
+    return r2_test, rmse_test, singular, tt, best_degree, num_params
+
+def fit_poly_mononomial(X, y, degree, include_bias=True):
+    """
+    X_train: Numpy array of shape (B, d)
+    y: Numpy array of shape (B,1)
+    degree: total degree (int)
+    """
+    poly = PolynomialFeatures(degree=degree, include_bias=include_bias)
+    Phi = poly.fit_transform(X)          # (B, n_terms)
+    y = y.reshape(-1, 1)
+
+    Phi = torch.tensor(Phi, dtype=torch.float64, device='cuda')
+    y = torch.tensor(y, dtype=torch.float64, device='cuda')
+    lstsq = torch.linalg.lstsq(Phi, y)
+    coeffs = lstsq.solution  # (n_terms, 1)
+    rank = lstsq.rank
+    
+    coeffs = coeffs.cpu().numpy()  # convert to numpy array
+
+    return poly, coeffs, rank
+
+def evaluate_poly(X, coeffs, poly):
+    """
+    Evaluate the polynomial with coefficients coeffs at X.
+
+    X: Numpy array of shape (B, d)
+    coeffs: Numpy array of shape (n_terms, 1)
+    poly: PolynomialFeatures instance used to generate coeffs
+    """
+    Phi = poly.transform(X)          # (B, n_terms)
+    y_pred = Phi.dot(coeffs)         # (B, 1)
+    return y_pred
 
 def evaluate_polynomial_regression(
     X_train, y_train,
@@ -230,13 +288,13 @@ def evaluate_polynomial_regression(
     early_stopping=5,
     verbose=0
 ):
-    current = {'poly': None, 'coeffs': None}
+    current = {'poly': None, 'coeffs': None, 'rank': None}
 
     def model_predict(X):
         return evaluate_poly(X, current['coeffs'], current['poly'])
 
     def get_weights():
-        return (current['poly'], current['coeffs'])
+        return (current['poly'], current['coeffs'], current['rank'])
 
     loss_fn = root_mean_squared_error
 
@@ -256,169 +314,289 @@ def evaluate_polynomial_regression(
         if special.comb(d + deg, d) >= 500_000:
             break
 
-        poly, coeffs = fit_poly_mononomial(
+        poly, coeffs, rank = fit_poly_mononomial(
             X_train, y_train, degree=deg, include_bias=True
         )
 
-        current['poly'], current['coeffs'] = poly, coeffs
+        current['poly'], current['coeffs'], current['rank'] = poly, coeffs, rank
 
         if es.convergence_criterion():
             break
-
+    
     best_summary = es.best_summary()
-    best_poly, best_coeffs = best_summary['best_state_dict']
+    best_poly, best_coeffs, best_rank = best_summary['best_state_dict']
     best_degree = best_summary['best_degree']
+    if best_poly is None:
+        return np.nan, np.nan, None, None, np.nan, None, None
 
     y_test_pred = evaluate_poly(X_test, best_coeffs, best_poly)
     test_r2 = r2_score(y_test, y_test_pred)
     test_rmse = root_mean_squared_error(y_test, y_test_pred)
 
-    return test_r2, test_rmse, best_poly, best_coeffs, best_degree
+    num_params = np.prod(best_coeffs.shape)
 
-def evaluate_model(
-    d,
-    data_degree,
-    num_train_points,
-    num_val_points,
-    num_test_points,
-    max_degree,
-    tt_rank,
-    abs_err=1e-5,
-    rel_err=1e-4,
-    early_stopping=5,
-    verbose=2,
-    random_state=42
-):
-    # 1) generate data
-    X_train, y_train, X_val, y_val, X_test, y_test = get_data(
-        d=d,
-        degree=data_degree,
-        num_train_points=num_train_points,
-        num_val_points=num_val_points,
-        num_test_points=num_test_points,
-        random_state=random_state
-    )
-
-    # 2) fit & time Tensor Train
-    torch.cuda.synchronize()
-    t0 = time.time()
-    tt_r2, tt_rmse, tt_singular, tt_model, tt_degree = evaluate_tensor_train(
-        X_train, y_train,
-        X_val, y_val,
-        X_test, y_test,
-        max_degree=max_degree,
-        rank=tt_rank,
-        split_train=False,
-        random_state=random_state,
-        verbose=verbose
-    )
-    torch.cuda.synchronize()
-    tt_time = time.time() - t0
-
-    # 3) fit & time polynomial regression
-    torch.cuda.synchronize()
-    t1 = time.time()
-    poly_r2, poly_rmse, poly_model, poly_coeffs, poly_degree = evaluate_polynomial_regression(
-        X_train, y_train,
-        X_val, y_val,
-        X_test, y_test,
-        max_degree=max_degree,
-        d=d,
-        abs_err=abs_err,
-        rel_err=rel_err,
-        early_stopping=early_stopping,
-        verbose=verbose
-    )
-    torch.cuda.synchronize()
-    poly_time = time.time() - t1
-
-    return (
-        X_train, y_train,
-        X_val, y_val,
-        X_test, y_test,
-        tt_r2, tt_rmse, tt_singular, tt_model, tt_degree, tt_time,
-        poly_r2, poly_rmse, poly_model, poly_coeffs, poly_degree, poly_time
-    )
+    return test_r2, test_rmse, best_poly, best_coeffs, best_degree, num_params, best_rank
 
 #%%
-(
+X_train, y_train, X_val, y_val, X_test, y_test = get_data(
+    d=10,
+    degree=10,
+    num_train_points=10000,
+    num_val_points=300,
+    num_test_points=10000,
+    random_state=46
+)
+tt_r2, tt_rmse, tt_singular, tt_model, tt_degree, tt_params = evaluate_tensor_train(
     X_train, y_train,
     X_val, y_val,
     X_test, y_test,
-    tt_r2, tt_rmse, tt_singular, tt_model, tt_degree, tt_time,
-    poly_r2, poly_rmse, poly_model, poly_coeffs, poly_degree, poly_time
-) = evaluate_model(
-    d=10,
-    data_degree=7,
-    num_train_points=1000,
-    num_val_points=300,
-    num_test_points=1000,
-    max_degree=8,
-    tt_rank=25,
-    abs_err=1e-5,
-    rel_err=1e-4,
     early_stopping=5,
-    verbose=2,
-    random_state=42
+    max_degree=15,
+    rank=25,
+    split_train=False,
+    random_state=46,
+    verbose=2
 )
-print("Tensor Train Results:")
-print(f"R2: {tt_r2:.4f}, RMSE: {tt_rmse:.4f}, Singular: {tt_singular}, Degree: {tt_degree}, Time: {tt_time:.2f}s")
-print("Polynomial Regression Results:")
-print(f"R2: {poly_r2:.4f}, RMSE: {poly_rmse:.4f}, Degree: {poly_degree}, Time: {poly_time:.2f}s")
+print(f"TT R2: {tt_r2}, RMSE: {tt_rmse}, Degree: {tt_degree}, Params: {tt_params}, Singular: {tt_singular}")
+#%%
+# Plot train and test
+import matplotlib.pyplot as plt
+fig, ax = plt.subplots(1, 2, figsize=(12, 6))
+# Train set
+ax[0].scatter(X_train, y_train, color='blue', label='Train Data', alpha=0.5)
+y_train_pred = tt_model.predict(X_train)
+ax[0].scatter(X_train, y_train_pred, color='red', label='TT Prediction', alpha=0.5)
+ax[0].set_title('Train Set')
+ax[0].set_xlabel('X')
+ax[0].set_ylabel('y')
+ax[0].legend()
+# Test set
+ax[1].scatter(X_test, y_test, color='green', label='Test Data', alpha=0.5)
+y_test_pred = tt_model.predict(X_test)
+ax[1].scatter(X_test, y_test_pred, color='orange', label='TT Prediction', alpha=0.5)
+ax[1].set_title('Test Set')
+ax[1].set_xlabel('X')
+ax[1].set_ylabel('y')
+ax[1].legend()
+
+plt.tight_layout()
+plt.show()
 #%%
 from tqdm import tqdm
-ds = [1, 2, 4, 8, 12]
-data_degrees = [1, 2, 3, 4, 5, 6, 7, 10]
-ranks = [3, 9, 27]
+features = [1, 2, 4, 8, 12]
+poly_fit_degrees = [1, 2, 3, 4, 5, 6, 7, 10]
+ranks = [4, 8, 24]
 seeds = list(range(42, 52))  # 10 different seeds for robustness
 results = [] #pairs for pandas df
-# data_dim, data_degree, seed,
-# tt_r2, tt_rmse, tt_degree, tt_time, tt_rank,
-# poly_r2, poly_rmse, poly_degree, poly_time
 
-tbar = tqdm(total=len(ds) * len(data_degrees) * len(seeds) * len(ranks), desc="Evaluating models")
-for d in ds:
-    for data_degree in data_degrees:
-        for rank in ranks:
-            for seed in seeds:
+num_train_points=1000
+num_val_points=300
+num_test_points=1000
+max_degree=15
+abs_err=1e-5
+rel_err=1e-4
+early_stopping=5
+verbose=0
+tbar = tqdm(total=len(features) * len(poly_fit_degrees) * len(seeds), desc="Evaluating models")
+for d in features:
+    for data_degree in poly_fit_degrees:
+        for seed in seeds:
+            # 1) generate data
+            X_train, y_train, X_val, y_val, X_test, y_test = get_data(
+                d=d,
+                degree=data_degree,
+                num_train_points=num_train_points,
+                num_val_points=num_val_points,
+                num_test_points=num_test_points,
+                random_state=seed
+            )
+
+            for rank in ranks:
                 tbar.set_description(f"Evaluating d={d}, degree={data_degree}, seed={seed}, rank={rank}")
-                (
+
+                # 2) fit & time Tensor Train
+                torch.cuda.synchronize()
+                t0 = time.time()
+                tt_r2, tt_rmse, tt_singular, tt_model, tt_degree, tt_params = evaluate_tensor_train(
                     X_train, y_train,
                     X_val, y_val,
                     X_test, y_test,
-                    tt_r2, tt_rmse, tt_singular, tt_model, tt_degree, tt_time,
-                    poly_r2, poly_rmse, poly_model, poly_coeffs, poly_degree, poly_time
-                ) = evaluate_model(
-                    d=d,
-                    data_degree=data_degree,
-                    num_train_points=10000,
-                    num_val_points=3000,
-                    num_test_points=10000,
-                    max_degree=15,
-                    tt_rank=rank,
-                    abs_err=1e-5,
-                    rel_err=1e-4,
-                    early_stopping=5,
-                    verbose=0,
-                    random_state=seed
+                    max_degree=max_degree,
+                    rank=rank,
+                    split_train=False,
+                    random_state=seed,
+                    verbose=verbose
                 )
-                
-                tbar.set_postfix({
-                    'tt_r2': tt_r2,
-                    'tt_rmse': tt_rmse,
-                    'tt_degree': tt_degree,
-                    'tt_time': tt_time,
-                    'poly_r2': poly_r2,
-                    'poly_rmse': poly_rmse,
-                    'poly_degree': poly_degree,
-                    'poly_time': poly_time
-                })
-                tbar.update(1)
-
+                torch.cuda.synchronize()
+                tt_time = time.time() - t0
                 results.append((
-                    d, data_degree, seed,
-                    tt_r2, tt_rmse, tt_degree, tt_time, rank,
-                    poly_r2, poly_rmse, poly_degree, poly_time
+                    'tt', d, data_degree, seed, tt_r2, tt_rmse, tt_degree, tt_time, tt_params, rank,
                 ))
 
+            # 3) fit & time polynomial regression
+            torch.cuda.synchronize()
+            t1 = time.time()
+            poly_r2, poly_rmse, poly_model, poly_coeffs, poly_degree, poly_params, poly_rank = evaluate_polynomial_regression(
+                X_train, y_train,
+                X_val, y_val,
+                X_test, y_test,
+                max_degree=max_degree,
+                d=d,
+                abs_err=abs_err,
+                rel_err=rel_err,
+                early_stopping=early_stopping,
+                verbose=verbose
+            )
+            torch.cuda.synchronize()
+            poly_time = time.time() - t1
+            if poly_model is None:
+                poly_time = np.nan
+            results.append((
+                'poly', d, data_degree, seed, poly_r2, poly_rmse, poly_degree, poly_time, poly_params, poly_rank
+            ))
+                
+            tbar.set_postfix({
+                'tt_r2': tt_r2,
+                'tt_rmse': tt_rmse,
+                'tt_degree': tt_degree,
+                'tt_time': tt_time,
+                'tt_params': tt_params,
+                'poly_r2': poly_r2,
+                'poly_rmse': poly_rmse,
+                'poly_degree': poly_degree,
+                'poly_time': poly_time,
+                'poly_params': poly_params
+            })
+            tbar.update(1)
+
+
 #%%
+import pandas as pd
+df = pd.DataFrame(results, columns=[
+    'model', 'd', 'data_degree', 'seed',
+    'r2', 'rmse', 'degree', 'time', 'params', 'rank'
+])
+# There are some "rank" for polynomials that are empty tensors, set these to -1 if they are isinstance(torch.Tensor)
+df['rank'] = df['rank'].apply(lambda x: x if isinstance(x, int) else -1)
+# Write CSV
+df.to_csv('multivariate_polynomials_results.csv', index=False)
+#%%
+# Visualize some results
+import pandas as pd
+# Load the results
+df = pd.read_csv('multivariate_polynomials_results.csv')
+
+import seaborn as sns
+import matplotlib.pyplot as plt
+# Set the style
+sns.set(style="whitegrid")
+# First we plot the r2 scores as a function of number of parameters.
+# We need to create a new variable (something like 'model_name') that combines model and rank for tt and just poly for poly
+df['model_name'] = df.apply(lambda row: f"{row['model']}_rank{row['rank']}" if row['model'] == 'tt' else row['model'], axis=1)
+# Also create a new variable that measures the difference between model degree and data degree
+df['degree_diff'] = df['degree'] - df['data_degree']
+#%%
+# Get all lower R^2 than 0 and with d > 4
+df_bad = df[(df['r2'] < 0)]
+# Print all rows
+print(df_bad.to_string(index=False))
+#%%
+# We can now group by model_name and seed to get the mean and sem of r2 scores
+# Then we need to calculate the mean and sem across seeds.
+df_plot = df.copy()
+# Filter only for d = 1
+df_plot = df_plot[df_plot['d'] == 4]
+# Now we can plot the results
+plt.figure(figsize=(12, 6))
+sns.lineplot(
+    data=df_plot,
+    x='params',
+    y='r2',
+    hue='model_name',
+    marker='o',
+    estimator='median',
+    errorbar='se',
+)
+plt.ylim(0,1)
+plt.xscale('log')
+plt.legend(title='Model', loc='upper left')
+plt.tight_layout()
+plt.show()
+# %%
+# Create array that has d as the first dimension and data_degree as the second dimension, then one for each model_name.
+# Then have each element be the mean time for that d and data_degree.
+import numpy as np
+# Get unique values of d and data_degree
+d_values = df['d'].unique()
+data_degree_values = df['data_degree'].unique()
+model_names = df['model_name'].unique()
+# Create a dictionary to hold the arrays
+arrays = {model_name: np.zeros((len(d_values), len(data_degree_values))) for model_name in model_names}
+# Fill the arrays with the mean time for each d and data_degree
+for model_name in model_names:
+    for i, d in enumerate(d_values):
+        for j, data_degree in enumerate(data_degree_values):
+            mean_time = df[(df['model_name'] == model_name) & (df['d'] == d) & (df['data_degree'] == data_degree)]['time'].mean()
+            arrays[model_name][i, j] = mean_time
+# Now we can plot the results using heatmap
+fig, axs = plt.subplots(1, len(model_names), figsize=(8 * len(model_names), 6))
+axs = axs.flatten() if len(model_names) > 1 else [axs]
+for i, (model_name, array) in enumerate(arrays.items()):
+    ax=axs[i]
+    sns.heatmap(
+        array,
+        annot=True,
+        fmt=".2f",
+        xticklabels=data_degree_values,
+        yticklabels=d_values,
+        cmap='viridis',
+        cbar_kws={'label': 'Mean Time (s)'},
+        vmin=0,
+        vmax=np.max(list(arrays.values())),
+        ax=ax
+    )
+    ax.set_title(model_name)
+    ax.set_xlabel('Data Degree')
+    ax.set_ylabel('d (Number of Variables)')
+    ax.tick_params(axis='x', rotation=45)
+    ax.tick_params(axis='y', rotation=0)
+plt.tight_layout()
+os.makedirs('figs', exist_ok=True)
+plt.savefig('figs/multivariate_polynomials_time_heatmap.png', dpi=300)
+plt.show()
+#%%
+# Now do the same for r2 scores
+arrays_r2 = {model_name: np.zeros((len(d_values), len(data_degree_values))) for model_name in model_names}
+# Fill the arrays with the mean r2 for each d and data_degree
+for model_name in model_names:
+    for i, d in enumerate(d_values):
+        for j, data_degree in enumerate(data_degree_values):
+            mean_r2 = df[(df['model_name'] == model_name) & (df['d'] == d) & (df['data_degree'] == data_degree)]['r2'].mean()
+            arrays_r2[model_name][i, j] = mean_r2
+# Now we can plot the results using heatmap
+fig, axs = plt.subplots(1, len(model_names), figsize=(8 * len(model_names), 6))
+axs = axs.flatten() if len(model_names) > 1 else [axs]
+for i, (model_name, array) in enumerate(arrays_r2.items()):
+    ax=axs[i]
+    sns.heatmap(
+        array,
+        annot=True,
+        fmt=".2f",
+        xticklabels=data_degree_values,
+        yticklabels=d_values,
+        cmap='viridis',
+        cbar_kws={'label': 'Mean R2 Score'},
+        vmin=0,
+        vmax=1,
+        ax=ax
+    )
+    ax.set_title(model_name)
+    ax.set_xlabel('Data Degree')
+    ax.set_ylabel('d (Number of Variables)')
+    ax.tick_params(axis='x', rotation=45)
+    ax.tick_params(axis='y', rotation=0)
+plt.tight_layout()
+os.makedirs('figs', exist_ok=True)
+plt.savefig('figs/multivariate_polynomials_r2_heatmap.png', dpi=300)
+plt.show()
+# %%
