@@ -29,30 +29,54 @@ class EarlyStopping:
         self.best_degree = start_degree
         self.best_val_loss = np.inf
         self.best_train_loss = np.inf
+        self.val_history = {}
         weights = self.get_model_weights()
         self.best_state_dict = weights if weights is not None else None
 
     def convergence_criterion(self):
+        # Compute losses
         y_pred_val = self.model_predict(self.X_val)
         val_loss = self.loss_fn(self.y_val, y_pred_val)
+        
+        self.val_history[self.cur_degree] = val_loss
+
+        train_loss = None
         if self.verbose > 0:
             y_pred_train = self.model_predict(self.X_train)
             train_loss = self.loss_fn(self.y_train, y_pred_train)
             print(f"Degree {self.cur_degree}: Train loss: {train_loss:.4f}, Val loss: {val_loss:.4f}")
-        if (self.best_val_loss - val_loss) >= self.abs_err or (self.best_val_loss - val_loss) >= self.rel_err * abs(self.best_val_loss):
+
+        # Measure improvement relative to previous best
+        prev_best = self.best_val_loss
+        improvement = prev_best - val_loss
+        meets_abs = improvement >= self.abs_err
+        meets_rel = improvement >= self.rel_err * abs(prev_best)
+        meets_threshold = meets_abs or meets_rel
+
+        if improvement > 0:
+            # Always save the new best
             self.best_val_loss = val_loss
-            if self.verbose > 0:
+            if self.verbose > 0 and train_loss is not None:
                 self.best_train_loss = train_loss
             self.best_degree = self.cur_degree
             if self.get_model_weights is not None:
                 self.best_state_dict = self.get_model_weights()
-            self.early_stop_count = 0
+
+            # Only reset patience if the improvement meets thresholds
+            if meets_threshold:
+                self.early_stop_count = 0
+            else:
+                self.early_stop_count += 1
         else:
+            # No improvement at all
             self.early_stop_count += 1
+
+        # Early stopping check
         if self.early_stop_count >= self.early_stopping:
             if self.verbose > 0:
                 print(f"Converged degree: {self.best_degree} with best loss: {self.best_val_loss:.4f}")
             return True
+
         self.cur_degree += 1
         return False
 
@@ -226,7 +250,7 @@ class TensorTrainRegressorEarlyStopping(TensorTrainRegressor):
             self.input_dim = X_train.shape[1]
             self._initialize_model()
 
-        early_stopping = EarlyStopping(
+        self._early_stopping = EarlyStopping(
             X_train, y_train, X_val, y_val,
             model_predict=self._model,
             get_model_weights=lambda: self._model.node_states(),
@@ -240,7 +264,7 @@ class TensorTrainRegressorEarlyStopping(TensorTrainRegressor):
         converged = self._model.tensor_network.accumulating_swipe(
             X_train, y_train, self.bf,
             batch_size=self.batch_size,
-            convergence_criterion=early_stopping.convergence_criterion,
+            convergence_criterion=self._early_stopping.convergence_criterion,
             eps=self.epss,
             method=self.method,
             skip_second=True,  # always True
@@ -254,7 +278,7 @@ class TensorTrainRegressorEarlyStopping(TensorTrainRegressor):
         )
 
         # Get the best summary
-        best_summary = early_stopping.best_summary()
+        best_summary = self._early_stopping.best_summary()
         best_state_dict = best_summary['best_state_dict']
         self._best_degree = best_summary['best_degree']
 

@@ -111,7 +111,7 @@ class RandomPolynomial:
         return Phi.dot(self.coeffs_)        # (B,)
     
 class RandomPolynomialRange:
-    def __init__(self, d, degree, input_range=(-1, 1), random_state=None):
+    def __init__(self, d, degree, input_range=(-1, 1), mask=0.0, random_state=None):
         self.d = d
         self.degree = degree
         self.range_start, self.range_end = input_range
@@ -124,10 +124,10 @@ class RandomPolynomialRange:
         self.C = self.rng.normal(
             loc=0.0,
             scale=1.0,
-            size=(self.d,)
+            size=(self.degree, self.d)
         )
-        self.C = np.exp(self.C - np.max(self.C))
-        self.C /= np.sum(self.C)
+        self.C = np.exp(self.C - np.max(self.C, axis=1, keepdims=True))
+        self.C /= (np.sum(self.C, axis=1, keepdims=True) + 1e-12)
         self.roots = self.rng.uniform(
             low=self.range_start,
             high=self.range_end,
@@ -145,23 +145,84 @@ class RandomPolynomialRange:
         if x.ndim != 2 or x.shape[1] != self.d:
             raise ValueError(f"x must be shape (B, {self.d})")
         
-        t = np.dot(x, self.C)  # (B,) weighted sum of inputs
+        t = np.dot(x, self.C.T)  # (B, degree) weighted sum of inputs
 
         # Output is a polynomial of t with roots at self.roots
         # Calculate distance to each root
-        dist = (t[:, None] - self.roots[None, :])  # (B, degree)
+        dist = (t - self.roots[None, :])  # (B, degree)
         # Multiply by (t - root) for each root
         y = np.prod(dist, axis=1)  # (B,) product over roots
         
         return y
 
+class RandomIndependentPolynomial:
+    def __init__(
+        self,
+        d: int,
+        degree: int,
+        coeff_sigma: float = 0.2,
+        r: float = 1.0,
+        mask: float = 0.1,
+        include_bias: bool = True,
+        interaction_only: bool = False,
+        random_state = None,
+    ):
+        self.d = int(d)
+        self.degree = int(degree)
+        self.r = float(r)
+        self.mask = float(mask)
+        self.include_bias = bool(include_bias)
+        self.interaction_only = bool(interaction_only)
+
+        # RNG
+        if random_state is None:
+            self.rng = np.random.default_rng()
+        else:
+            self.rng = np.random.default_rng(random_state)
+
+        # Build PolynomialFeatures and "fit" on dummy data to populate .powers_
+        self.poly = PolynomialFeatures(
+            degree=self.degree,
+            include_bias=self.include_bias,
+            interaction_only=self.interaction_only
+        )
+        self.poly.fit(np.zeros((1, self.d)))  # just to get powers_
+
+        # Sample coefficients with full independence (comb(degree + dim, dim) total coefficients)
+        self.coeffs_ = self.rng.normal(
+            loc=0.0,
+            scale=coeff_sigma,
+            size=(self.poly.powers_.shape[0], 1)  # (n_features, 1)
+        )
+
+    def design_matrix(self, x: np.ndarray):
+        """
+        Return the monomial feature matrix Phi for x.
+
+        x: (B, d) array
+        Phi: (B, n_features) where n_features = C(D+d, d) (if include_bias=True; minus 1 otherwise)
+        """
+        x = np.asarray(x)
+        if x.ndim != 2 or x.shape[1] != self.d:
+            raise ValueError(f"x must be shape (B, {self.d})")
+        return self.poly.transform(x)
+
+    def evaluate(self, x: np.ndarray):
+        """
+        Evaluate the polynomial at x.
+
+        x: (B, d)
+        returns y: (B,)
+        """
+        Phi = self.design_matrix(x)         # (B, n_features)
+        return Phi.dot(self.coeffs_)        # (B,)
 
 
 def get_data(d, degree, num_train_points, num_val_points, num_test_points, random_state=42):
     rng = np.random.default_rng(random_state)
-    X_train = rng.uniform(-1, 1, size=(num_train_points, d))
-    X_val = rng.uniform(-1, 1, size=(num_val_points, d))
-    X_test = rng.uniform(-1, 1, size=(num_test_points, d))
+    X_train = rng.uniform(-1, 1, size=(num_train_points, d)) #rng.normal(1, 0.1, size=(num_train_points, d))
+    X_val = rng.uniform(-1, 1, size=(num_val_points, d)) #rng.normal(1, 0.1, size=(num_val_points, d))
+    X_test = rng.uniform(-1, 1, size=(num_test_points, d)) #rng.normal(1, 0.3, size=(num_test_points, d))
 
     # poly = RandomPolynomial(
     #     d=d,
@@ -178,6 +239,15 @@ def get_data(d, degree, num_train_points, num_val_points, num_test_points, rando
         input_range=(-1, 1),
         random_state=random_state
     )
+    # poly = RandomIndependentPolynomial(
+    #     d=d,
+    #     degree=degree,
+    #     coeff_sigma=5,
+    #     r=1,
+    #     include_bias=True,
+    #     interaction_only=False,
+    #     random_state=random_state
+    # )
     y_train = poly.evaluate(X_train)
     y_val = poly.evaluate(X_val)
     y_test = poly.evaluate(X_test)
@@ -204,6 +274,8 @@ def evaluate_tensor_train(
 ):
     if max_degree > 2:
         tt = TensorTrainRegressorEarlyStopping(
+            eps_start=1e-12,
+            eps_end=1e-12,
             early_stopping=early_stopping,
             rel_err=1e-4,
             abs_err=1e-6,
@@ -226,8 +298,9 @@ def evaluate_tensor_train(
             # pass validation data into fit()
             tt.fit(X_train, y_train, X_val=X_val, y_val=y_val)
             singular = tt._singular
-        except Exception:
+        except Exception as e:
             singular = True
+            print(f"Error during fitting: {e}")
 
         # evaluate on the test set
         y_pred_test = tt.predict(X_test)
@@ -235,6 +308,7 @@ def evaluate_tensor_train(
         rmse_test = root_mean_squared_error(y_test, y_pred_test)
         best_degree = tt._best_degree
         num_params = sum(p.tensor.numel() for i, p in enumerate(tt._model.tensor_network.train_nodes) if i < tt._best_degree)
+        val_history = tt._early_stopping.val_history
     else:
         tt = None
         singular = True
@@ -242,8 +316,9 @@ def evaluate_tensor_train(
         r2_test = np.nan
         rmse_test = np.nan
         num_params = None
+        val_history = None
 
-    return r2_test, rmse_test, singular, tt, best_degree, num_params
+    return r2_test, rmse_test, singular, tt, best_degree, num_params, val_history
 
 def fit_poly_mononomial(X, y, degree, include_bias=True):
     """
@@ -326,8 +401,9 @@ def evaluate_polynomial_regression(
     best_summary = es.best_summary()
     best_poly, best_coeffs, best_rank = best_summary['best_state_dict']
     best_degree = best_summary['best_degree']
+    best_val_history = es.val_history
     if best_poly is None:
-        return np.nan, np.nan, None, None, np.nan, None, None
+        return np.nan, np.nan, None, None, np.nan, None, None, None
 
     y_test_pred = evaluate_poly(X_test, best_coeffs, best_poly)
     test_r2 = r2_score(y_test, y_test_pred)
@@ -335,23 +411,23 @@ def evaluate_polynomial_regression(
 
     num_params = np.prod(best_coeffs.shape)
 
-    return test_r2, test_rmse, best_poly, best_coeffs, best_degree, num_params, best_rank
+    return test_r2, test_rmse, best_poly, best_coeffs, best_degree, num_params, best_rank, best_val_history
 
 #%%
 X_train, y_train, X_val, y_val, X_test, y_test = get_data(
-    d=10,
-    degree=10,
-    num_train_points=10000,
-    num_val_points=300,
+    d=1,
+    degree=3,
+    num_train_points=7,
+    num_val_points=10,
     num_test_points=10000,
-    random_state=46
+    random_state=42
 )
-tt_r2, tt_rmse, tt_singular, tt_model, tt_degree, tt_params = evaluate_tensor_train(
+tt_r2, tt_rmse, tt_singular, tt_model, tt_degree, tt_params, tt_history = evaluate_tensor_train(
     X_train, y_train,
     X_val, y_val,
     X_test, y_test,
     early_stopping=5,
-    max_degree=15,
+    max_degree=20,
     rank=25,
     split_train=False,
     random_state=46,
@@ -381,6 +457,100 @@ ax[1].legend()
 
 plt.tight_layout()
 plt.show()
+#%%
+# Fit polynomial regression
+poly_r2, poly_rmse, poly_model, poly_coeffs, poly_degree, poly_params, poly_rank, poly_history = evaluate_polynomial_regression(
+    X_train, y_train,
+    X_val, y_val,
+    X_test, y_test,
+    max_degree=20,
+    d=5,
+    abs_err=1e-5,
+    rel_err=1e-4,
+    early_stopping=5,
+    verbose=2
+)
+print(f"Poly R2: {poly_r2}, RMSE: {poly_rmse}, Degree: {poly_degree}, Params: {poly_params}")
+#%%
+import pandas as pd
+
+def collect_results(seeds=range(42, 63), n_values=range(4, 9)):
+    rows = []
+
+    for seed in seeds:
+        for n in n_values:
+            # Generate data once per seed and N
+            X_train, y_train, X_val, y_val, X_test, y_test = get_data(
+                d=1,
+                degree=3,
+                num_train_points=n,
+                num_val_points=10,
+                num_test_points=10000,
+                random_state=seed
+            )
+
+            # Tensor Train model
+            tt_r2, tt_rmse, tt_singular, tt_model, tt_degree, tt_params, tt_history = evaluate_tensor_train(
+                X_train, y_train,
+                X_val, y_val,
+                X_test, y_test,
+                early_stopping=5,
+                max_degree=15,
+                rank=25,
+                split_train=False,
+                random_state=seed,
+                verbose=0
+            )
+
+            # Polynomial baseline
+            poly_r2, poly_rmse, poly_model, poly_coeffs, poly_degree, poly_params, poly_rank, poly_history = evaluate_polynomial_regression(
+                X_train, y_train,
+                X_val, y_val,
+                X_test, y_test,
+                max_degree=15,
+                d=1,
+                abs_err=1e-5,
+                rel_err=1e-4,
+                early_stopping=5,
+                verbose=0
+            )
+
+            # tt_history and poly_history are assumed to be dicts: {degree: validation_loss}
+            for deg, loss in tt_history.items():
+                rows.append((seed, "tt", n, deg, float(loss)))
+
+            for deg, loss in poly_history.items():
+                rows.append((seed, "poly", n, deg, float(loss)))
+
+    df = pd.DataFrame(rows, columns=["seed", "name", "N", "degree", "loss"])
+    return df
+
+# Example usage
+df = collect_results()
+print(df.head())
+print(len(df), "rows")
+#%%
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+plt.figure(figsize=(8, 6))
+sns.lineplot(
+    data=df,
+    x="degree",
+    y="loss",
+    hue="name",
+    style="N",
+    markers=True,
+    errorbar="se"
+)
+
+plt.yscale("log")
+plt.title("Validation Loss with Mean ± SEM")
+plt.xlabel("Degree")
+plt.ylabel("Validation Loss")
+plt.tight_layout()
+plt.show()
+
 #%%
 from tqdm import tqdm
 features = [1, 2, 4, 8, 12]
@@ -510,14 +680,13 @@ df_plot = df_plot[df_plot['d'] == 4]
 plt.figure(figsize=(12, 6))
 sns.lineplot(
     data=df_plot,
-    x='params',
-    y='r2',
+    x='data_degree',
+    y='degree',
     hue='model_name',
     marker='o',
     estimator='median',
     errorbar='se',
 )
-plt.ylim(0,1)
 plt.xscale('log')
 plt.legend(title='Model', loc='upper left')
 plt.tight_layout()
