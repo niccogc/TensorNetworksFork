@@ -99,7 +99,7 @@ class TensorTrainRegressor(BaseEstimator, RegressorMixin):
         self.N = N
         self.r = r
         self.output_dim = output_dim
-        self.linear_dim = linear_dim
+        self.linear_dim = linear_dim if linear_dim is not None and linear_dim > 0 else None
         self.constrict_bond = constrict_bond
         self.perturb = perturb
         self.seed = seed
@@ -284,9 +284,26 @@ class TensorTrainRegressorEarlyStopping(TensorTrainRegressor):
 
         self._singular = not converged
 
-
         # Restore best state if available
         if best_state_dict is not None:
             self._model.load_node_states(best_state_dict, set_value=True)
-
+        
+        # # Now train for a couple of swipes across the best degree blocks
+        # self._model.tensor_network.accumulating_swipe(
+        #     X_train, y_train, self.bf,
+        #     node_order=self._model.tensor_network.train_nodes[:self._best_degree],
+        #     batch_size=self.batch_size,
+        #     convergence_criterion=lambda: False,
+        #     eps=1e-12,
+        #     method=self.method,
+        #     skip_second=False,
+        #     eps_r=self.eps_r,
+        #     lr=self.lr,
+        #     orthonormalize=False,
+        #     verbose=self.verbose == 1,
+        #     num_swipes=10,
+        #     direction='l2r',
+        #     disable_tqdm=True
+        # )
+        
         return self

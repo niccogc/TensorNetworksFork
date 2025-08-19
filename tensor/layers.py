@@ -27,28 +27,29 @@ class MainNodeLayer(nn.Module):
             return (mx, b1)
 
         def build_perturb(rl, f, rr):
-            if rl==rr:
-                block = torch.diag_embed(torch.ones(rr, dtype=dtype)).unsqueeze(1)
-            else:
+            if rl == 1 or rr == 1:
                 block = torch.ones(rl, rr, dtype=dtype).unsqueeze(1)
+            else:
+                block = torch.eye(rl, rr, dtype=dtype).unsqueeze(1)
 
             blockf = torch.cat((torch.zeros(rl, f-1, rr), block), dim=1)
             return blockf.unsqueeze(1)
 
         if perturb:
-            b0 = 0.02 * torch.randn((1, output_shape[0], f, r), dtype=dtype)
+            b0 = 0.02 * torch.randn((1, output_shape[0], f, min(r, f) if constrict_bond else r), dtype=dtype)
             bn = build_perturb(r, f, 1)
             left_stack = [b0]
             right_stack = [bn]
             middle = [b0, bn]
             for i in range(N-2):
-                
                 rl = left_stack[-1].shape[-1]
                 rr = right_stack[0].shape[0]
                 if i == N-3:
                     middle_block = build_perturb(rl, f, rr)
                     middle = [*left_stack, middle_block, *right_stack]
-                left_stack.append(build_perturb(rl, f, r))
+                else:
+                    mx = min(r, rl*f) if constrict_bond else r
+                    left_stack.append(build_perturb(rl, f, mx))
         else:
             b0 = build_left(1, f, r)
             bn = build_right(r, f, 1)

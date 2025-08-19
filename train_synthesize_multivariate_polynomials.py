@@ -1,6 +1,6 @@
 #%%
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 import torch
 torch.set_default_dtype(torch.float64)
 import numpy as np
@@ -279,14 +279,12 @@ def evaluate_tensor_train(
             early_stopping=early_stopping,
             rel_err=1e-4,
             abs_err=1e-6,
-            validation_split=0.2,
             split_train=split_train,
             N=max_degree,
             r=rank,
             output_dim=1,
-            linear_dim=X_train.shape[1] + 1,
             batch_size=-1,
-            constrict_bond=True,
+            constrict_bond=False,
             seed=random_state,
             device='cuda',
             bf=SquareBregFunction(),
@@ -294,13 +292,13 @@ def evaluate_tensor_train(
             method='ridge_cholesky',
             verbose=verbose
         )
-        try:
-            # pass validation data into fit()
-            tt.fit(X_train, y_train, X_val=X_val, y_val=y_val)
-            singular = tt._singular
-        except Exception as e:
-            singular = True
-            print(f"Error during fitting: {e}")
+        #try:
+        # pass validation data into fit()
+        tt.fit(X_train, y_train, X_val=X_val, y_val=y_val)
+        singular = tt._singular
+        # except Exception as e:
+        #     singular = True
+        #     print(f"Error during fitting: {e}")
 
         # evaluate on the test set
         y_pred_test = tt.predict(X_test)
@@ -473,54 +471,57 @@ poly_r2, poly_rmse, poly_model, poly_coeffs, poly_degree, poly_params, poly_rank
 print(f"Poly R2: {poly_r2}, RMSE: {poly_rmse}, Degree: {poly_degree}, Params: {poly_params}")
 #%%
 import pandas as pd
+from tqdm import tqdm
 
-def collect_results(seeds=range(42, 63), n_values=range(4, 9)):
+def collect_results(seeds=range(42, 73), degree=3, d=5):
     rows = []
+    n_values = [math.comb(i+d-1, d) for i in range(degree+1,degree+6)]
+    with tqdm(total=len(seeds) * len(n_values), desc="Collecting results") as pbar:
+        for seed in seeds:
+            for n in n_values:
+                # Generate data once per seed and N
+                X_train, y_train, X_val, y_val, X_test, y_test = get_data(
+                    d=d,
+                    degree=degree,
+                    num_train_points=n,
+                    num_val_points=10*n,
+                    num_test_points=2,
+                    random_state=seed
+                )
 
-    for seed in seeds:
-        for n in n_values:
-            # Generate data once per seed and N
-            X_train, y_train, X_val, y_val, X_test, y_test = get_data(
-                d=1,
-                degree=3,
-                num_train_points=n,
-                num_val_points=10,
-                num_test_points=10000,
-                random_state=seed
-            )
+                # Tensor Train model
+                tt_r2, tt_rmse, tt_singular, tt_model, tt_degree, tt_params, tt_history = evaluate_tensor_train(
+                    X_train, y_train,
+                    X_val, y_val,
+                    X_test, y_test,
+                    early_stopping=8,
+                    max_degree=8,
+                    rank=25,
+                    split_train=False,
+                    random_state=seed,
+                    verbose=0
+                )
 
-            # Tensor Train model
-            tt_r2, tt_rmse, tt_singular, tt_model, tt_degree, tt_params, tt_history = evaluate_tensor_train(
-                X_train, y_train,
-                X_val, y_val,
-                X_test, y_test,
-                early_stopping=5,
-                max_degree=15,
-                rank=25,
-                split_train=False,
-                random_state=seed,
-                verbose=0
-            )
+                # Polynomial baseline
+                poly_r2, poly_rmse, poly_model, poly_coeffs, poly_degree, poly_params, poly_rank, poly_history = evaluate_polynomial_regression(
+                    X_train, y_train,
+                    X_val, y_val,
+                    X_test, y_test,
+                    max_degree=8,
+                    d=d,
+                    abs_err=1e-5,
+                    rel_err=1e-4,
+                    early_stopping=5,
+                    verbose=0
+                )
 
-            # Polynomial baseline
-            poly_r2, poly_rmse, poly_model, poly_coeffs, poly_degree, poly_params, poly_rank, poly_history = evaluate_polynomial_regression(
-                X_train, y_train,
-                X_val, y_val,
-                X_test, y_test,
-                max_degree=15,
-                d=1,
-                abs_err=1e-5,
-                rel_err=1e-4,
-                early_stopping=5,
-                verbose=0
-            )
+                # tt_history and poly_history are assumed to be dicts: {degree: validation_loss}
+                for deg, loss in tt_history.items():
+                    rows.append((seed, "tt", n, deg, float(loss)))
 
-            # tt_history and poly_history are assumed to be dicts: {degree: validation_loss}
-            for deg, loss in tt_history.items():
-                rows.append((seed, "tt", n, deg, float(loss)))
-
-            for deg, loss in poly_history.items():
-                rows.append((seed, "poly", n, deg, float(loss)))
+                for deg, loss in poly_history.items():
+                    rows.append((seed, "poly", n, deg, float(loss)))
+                pbar.update(1)
 
     df = pd.DataFrame(rows, columns=["seed", "name", "N", "degree", "loss"])
     return df
@@ -551,6 +552,8 @@ plt.ylabel("Validation Loss")
 plt.tight_layout()
 plt.show()
 
+#%%
+# MARK: EXPERIMENT
 #%%
 from tqdm import tqdm
 features = [1, 2, 4, 8, 12]
