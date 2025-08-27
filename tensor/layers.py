@@ -32,12 +32,13 @@ class MainNodeLayer(nn.Module):
             else:
                 block = torch.eye(rl, rr, dtype=dtype).unsqueeze(1)
 
-            blockf = torch.cat((torch.zeros(rl, f-1, rr), block), dim=1)
-            return blockf.unsqueeze(1)
+            blockf = torch.cat((torch.zeros(rl, f-1, rr), block), dim=1).unsqueeze(1)
+            return blockf
 
         if perturb:
             b0 = 0.02 * torch.randn((1, output_shape[0], f, min(r, f) if constrict_bond else r), dtype=dtype)
             bn = build_perturb(r, f, 1)
+            bn = bn * (1+0.02*torch.randn_like(bn))
             left_stack = [b0]
             right_stack = [bn]
             middle = [b0, bn]
@@ -1423,7 +1424,7 @@ class CompressedTensorTrainLayer(TensorNetworkLayer):
         super(CompressedTensorTrainLayer, self).__init__(tensor_network)
 
 class CPDLayer(TensorNetworkLayer):
-    def __init__(self, num_factors, rank, input_features, output_shape=tuple(), dtype=None):
+    def __init__(self, num_factors, rank, input_features, output_shape=tuple(), perturb=False, seed=None):
         """
         Canonical Polyadic Decomposition (CPD) Layer.
         Args:
@@ -1437,43 +1438,58 @@ class CPDLayer(TensorNetworkLayer):
         self.rank = rank
         self.input_features = input_features
         self.output_shape = output_shape if isinstance(output_shape, tuple) else (output_shape,)
+        if seed is not None:
+            torch.manual_seed(seed)
+            torch.cuda.manual_seed(seed)
 
         # 1. Create input nodes
         self.x_nodes = []
         for i in range(1, num_factors + 1):
             x_node = TensorNode(
                 (1, input_features),
-                ['SAMPLE', 'PHYS'],
+                ['s', 'p'],
                 name=f"X{i}"
             )
             self.x_nodes.append(x_node)
 
         # 2. Create factor nodes
         self.nodes = []
-        self.labels = ['SAMPLE']
+        self.labels = ['s']
         for i in range(1, num_factors + 1):
             # Output dimension for this factor (default 1 if not specified)
             out_dim = self.output_shape[i-1] if i-1 < len(self.output_shape) else 1
-            # For the first factor, add an OUT leg for output, otherwise not
+            # For the first factor, add an o leg for output, otherwise not
             if i == 1:
                 node = TensorNode(
                     (rank, input_features, out_dim),
-                    ['BOND', 'PHYS', 'OUT'],
+                    ['b', 'p', 'o'],
                     name=f"A{i}"
                 )
-                self.labels.append('OUT')
-            else:
+                self.labels.append('o')
+            elif i == num_factors:
+                shape_or_tensor = (rank, input_features)
+                if perturb:
+                    shape_or_tensor = torch.cat((torch.zeros(rank, input_features-1), torch.ones(rank, 1) + 0.02 * torch.randn(rank, 1)), dim=1)
                 node = TensorNode(
-                    (rank, input_features),
-                    ['BOND', 'PHYS'],
+                    shape_or_tensor,
+                    ['b', 'p'],
+                    name=f"A{i}"
+                )
+            else:
+                shape_or_tensor = (rank, input_features)
+                if perturb:
+                    shape_or_tensor = torch.cat((torch.zeros(rank, input_features-1), torch.ones(rank, 1)), dim=1)
+                node = TensorNode(
+                    shape_or_tensor,
+                    ['b', 'p'],
                     name=f"A{i}"
                 )
             self.nodes.append(node)
 
-        # 3. Connect input nodes to factor nodes along 'PHYS'
+        # 3. Connect input nodes to factor nodes along 'p'
         for x, a in zip(self.x_nodes, self.nodes):
-            x.connect(a, 'PHYS')
+            x.connect(a, 'p')
 
         # 4. Build the TensorNetwork
-        tensor_network = CPDNetwork(self.x_nodes, self.nodes, output_labels=tuple(self.labels), sample_dim='SAMPLE')
+        tensor_network = CPDNetwork(self.x_nodes, self.nodes, output_labels=tuple(self.labels), sample_dim='s')
         super(CPDLayer, self).__init__(tensor_network)

@@ -1,9 +1,15 @@
 import numpy as np
+from time import time
 import torch
 from sklearn.base import BaseEstimator, RegressorMixin
-from sklearn.metrics import r2_score
-from tensor.layers import TensorTrainLayer, TensorTrainLinearLayer
+from sklearn.metrics import r2_score, root_mean_squared_error
+from tensor.layers import TensorTrainLayer, TensorTrainLinearLayer, CPDLayer
 from tensor.bregman import SquareBregFunction
+
+def root_mean_squared_error_torch(y_true, y_pred):
+    y_true = y_true.cpu().numpy()
+    y_pred = y_pred.cpu().numpy()
+    return root_mean_squared_error(y_true, y_pred)
 
 def unexplained_variance(y_true, y_pred):
     y_mean = torch.mean(y_true, dim=0, keepdim=True)
@@ -32,13 +38,17 @@ class EarlyStopping:
         self.val_history = {}
         weights = self.get_model_weights()
         self.best_state_dict = weights if weights is not None else None
+        self.start_time = time()
+        self.time_history = {}
 
     def convergence_criterion(self):
+        elapsed_time = time() - self.start_time
         # Compute losses
         y_pred_val = self.model_predict(self.X_val)
         val_loss = self.loss_fn(self.y_val, y_pred_val)
         
         self.val_history[self.cur_degree] = val_loss
+        self.time_history[self.cur_degree] = elapsed_time
 
         train_loss = None
         if self.verbose > 0:
@@ -92,9 +102,10 @@ class TensorTrainRegressor(BaseEstimator, RegressorMixin):
     def __init__(self, N=2, r=2, output_dim=1, linear_dim=None,  
                  constrict_bond=True, perturb=True, seed=42,
                  device='cuda', bf=None,
-                 lr=1.0, eps_start=1e-12, eps_end=1e-12, eps_r=0.5, 
+                 lr=1.0, eps_start=1e-12, eps_end=1e-12, 
                  batch_size=512, method='ridge_cholesky',
                  num_swipes=5,
+                 model_type='tt',
                  verbose=0):
         self.N = N
         self.r = r
@@ -106,11 +117,14 @@ class TensorTrainRegressor(BaseEstimator, RegressorMixin):
         self.device = device
         self.bf = bf if bf is not None else SquareBregFunction()
         self.lr = lr
-        self.epss = np.geomspace(eps_start, eps_end, 2 * num_swipes).tolist() if eps_end != eps_start else [eps_end] * (2 * num_swipes)
-        self.eps_r = eps_r
+        if num_swipes > 1:
+            self.epss = np.geomspace(eps_start, eps_end, 2 * num_swipes).tolist() if eps_end != eps_start else [eps_end] * (2 * num_swipes)
+        else:
+            self.epss = np.geomspace(eps_start, eps_end, N).tolist()
         self.batch_size = batch_size
         self.method = method
         self.num_swipes = num_swipes
+        self.model_type = model_type
         self.verbose = verbose
         
         self._model = None
@@ -118,7 +132,12 @@ class TensorTrainRegressor(BaseEstimator, RegressorMixin):
     def _initialize_model(self):
         if self.input_dim is None:
             raise ValueError("input_dim must be set")
-        if self.linear_dim is None or self.linear_dim >= self.input_dim:
+        if self.model_type == 'cpd':
+            self._model = CPDLayer(self.N, self.r, self.input_dim,
+                                   output_shape=self.output_dim,
+                                   perturb=self.perturb,
+                                   seed=self.seed).to(self.device)
+        elif self.linear_dim is None or self.linear_dim >= self.input_dim:
             self._model = TensorTrainLayer(self.N, self.r, self.input_dim, 
                                            output_shape=self.output_dim,
                                            constrict_bond=self.constrict_bond,
@@ -162,7 +181,6 @@ class TensorTrainRegressor(BaseEstimator, RegressorMixin):
             batch_size=self.batch_size,
             lr=self.lr,
             eps=self.epss,
-            eps_r=self.eps_r,
             convergence_criterion=convergence_criterion,
             orthonormalize=False,
             method=self.method,
@@ -170,7 +188,8 @@ class TensorTrainRegressor(BaseEstimator, RegressorMixin):
             num_swipes=self.num_swipes,
             skip_second=False,
             direction='l2r',
-            disable_tqdm=True
+            disable_tqdm=True,
+            eps_per_node=(self.num_swipes == 1) and (len(self.epss) == self.N)
         )
         
         return self
@@ -254,7 +273,7 @@ class TensorTrainRegressorEarlyStopping(TensorTrainRegressor):
             X_train, y_train, X_val, y_val,
             model_predict=self._model,
             get_model_weights=lambda: self._model.node_states(),
-            loss_fn=unexplained_variance,
+            loss_fn=root_mean_squared_error_torch,
             abs_err=self.abs_err,
             rel_err=self.rel_err,
             early_stopping=self.early_stopping,
@@ -268,13 +287,13 @@ class TensorTrainRegressorEarlyStopping(TensorTrainRegressor):
             eps=self.epss,
             method=self.method,
             skip_second=True,  # always True
-            eps_r=self.eps_r,
             lr=self.lr,
             orthonormalize=False,
-            verbose=self.verbose == 1,
+            verbose=self.verbose,
             num_swipes=1,      # always 1
             direction='l2r',
-            disable_tqdm=True
+            disable_tqdm=self.verbose < 3,
+            eps_per_node=True
         )
 
         # Get the best summary
@@ -294,14 +313,14 @@ class TensorTrainRegressorEarlyStopping(TensorTrainRegressor):
         #     node_order=self._model.tensor_network.train_nodes[:self._best_degree],
         #     batch_size=self.batch_size,
         #     convergence_criterion=lambda: False,
-        #     eps=1e-12,
+        #     eps=np.geomspace(1.0, 1e-12, 2*5).tolist(),
         #     method=self.method,
         #     skip_second=False,
         #     eps_r=self.eps_r,
         #     lr=self.lr,
         #     orthonormalize=False,
         #     verbose=self.verbose == 1,
-        #     num_swipes=10,
+        #     num_swipes=5,
         #     direction='l2r',
         #     disable_tqdm=True
         # )

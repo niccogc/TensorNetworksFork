@@ -21,7 +21,7 @@ def load_tabular_data(filename, device):
     y_test = data['y_test'].to(device)
     return x_train, y_train, x_val, y_val, x_test, y_test
 
-x_train, y_train, x_val, y_val, x_test, y_test = load_tabular_data('/work3/s183995/Tabular/data/processed/house_tensor.pt', device='cuda')
+x_train, y_train, x_val, y_val, x_test, y_test = load_tabular_data('/work3/aveno/Tabular/data/processed/house_tensor.pt', device='cuda')
 if y_train.ndim == 1:
     y_train = y_train.unsqueeze(1)
 y_train = y_train.to(dtype=torch.float64, device='cuda')
