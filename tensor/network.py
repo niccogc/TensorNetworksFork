@@ -112,7 +112,7 @@ class TensorNetwork:
 
         return contracted
 
-    def forward(self, x):
+    def forward(self, x, to_tensor=False):
         """Computes the forward pass of the network."""
         self.set_input(x)
 
@@ -130,7 +130,24 @@ class TensorNetwork:
         if right_stack is not None:
             contracted = contracted.contract_with(right_stack, right_stack.get_connecting_labels(contracted))
 
+        if self.output_labels is not None:
+            contracted = contracted.permute_first(*self.output_labels)
+        if to_tensor:
+            contracted = contracted.tensor
         return contracted
+    
+    def forward_batch(self, x, batch_size):
+        """Computes the forward pass of the network in batches."""
+        data_size = len(x) if isinstance(x, torch.Tensor) else x[0].shape[0]
+        if batch_size <= 0 or batch_size >= data_size:
+            return self.forward(x, to_tensor=True)
+        batches = (data_size + batch_size - 1) // batch_size # round up division
+        outputs = []
+        for b in range(batches):
+            x_batch = x[b*batch_size:(b+1)*batch_size] if isinstance(x, torch.Tensor) else [x[i][b*batch_size:(b+1)*batch_size] for i in range(len(x))]
+            y_batch = self.forward(x_batch, to_tensor=True)
+            outputs.append(y_batch)
+        return torch.cat(outputs, dim=0)
 
     def left_update_stacks(self, node):
         """Updates the left stacks."""
@@ -431,9 +448,7 @@ class TensorNetwork:
                     x_batch = move_batch(x_batch)
                     y_batch = move_batch(y_batch)
 
-                    y_pred = self.forward(x_batch)
-                    y_pred = y_pred.permute_first(*self.output_labels)
-                    y_pred = y_pred.tensor
+                    y_pred = self.forward(x_batch, to_tensor=True)
                     loss, d_loss, sqd_loss = loss_fn.forward(y_pred, y_batch)
 
                     A, b_vec = self.get_A_b(node_l2r, d_loss, sqd_loss)
@@ -528,7 +543,7 @@ class TensorNetwork:
                     x_batch = move_batch(x_batch)
                     y_batch = move_batch(y_batch)
 
-                    y_pred = self.forward(x_batch).permute_first(*self.output_labels).tensor
+                    y_pred = self.forward(x_batch, to_tensor=True)
                     loss, d_loss, sqd_loss = loss_fn.forward(y_pred, y_batch)
 
                     A, b_vec = self.get_A_b(node_r2l, d_loss, sqd_loss)
@@ -725,7 +740,7 @@ class TensorNetwork:
                     x_batch = move_batch(x_batch)
                     y_batch = move_batch(y_batch)
 
-                    y_pred = self.forward(x_batch).permute_first(*self.output_labels).tensor
+                    y_pred = self.forward(x_batch, to_tensor=True)
                     loss, d_loss, sqd_loss = loss_fn.forward(y_pred, y_batch)
 
                     b_vec = self.get_b(node, d_loss)
@@ -849,7 +864,7 @@ class TensorNetwork:
                     x_batch = move_batch(x_batch)
                     y_batch = move_batch(y_batch)
 
-                    y_pred = self.forward(x_batch).permute_first(*self.output_labels).tensor
+                    y_pred = self.forward(x_batch, to_tensor=True)
                     loss, d_loss, sqd_loss = loss_fn.forward(y_pred, y_batch)
 
                     b_vec = self.get_b(node, d_loss)
@@ -930,7 +945,7 @@ class CPDNetwork(TensorNetwork):
         jac = torch.einsum(','.join([''.join([labeler[l] for l in n.dim_labels]) for n in nodes])+f'->{labeler[self.sample_dim]}'+''.join([labeler[l] for l in node.dim_labels if l in labeler.mapping]), *[n.tensor for n in nodes])
         return TensorNode(jac, dim_labels=[self.sample_dim]+[l for l in node.dim_labels if l in labeler.mapping], name='J')
 
-    def forward(self, x):
+    def forward(self, x, to_tensor=False):
         """Computes the forward pass of the network."""
         self.set_input(x)
 
@@ -951,3 +966,76 @@ class CPDNetwork(TensorNetwork):
                 self.node_contract[input_node] = stack
         else:
             self.node_contract = None
+
+class SumOfNetworks(TensorNetwork):
+    # A function which takes multiple tensor networks and sums their outputs.
+    # We need to define the recompute_all_stacks, forward and reset_stacks methods.
+    def __init__(self, networks, output_labels=('s',), sample_dim='s', only_bias_first=False, train_linear=True):
+        input_nodes = []
+        main_nodes = []
+        train_nodes = []
+        for net in networks:
+            input_nodes.extend(net.input_nodes)
+            main_nodes.extend(net.main_nodes)
+            if train_linear:
+                train_nodes.extend(net.train_nodes)
+            else:
+                train_nodes.extend(net.main_nodes)
+        super().__init__(input_nodes, main_nodes, train_nodes, output_labels=output_labels, sample_dim=sample_dim)
+        self.networks = networks
+        self.only_bias_first = only_bias_first
+    
+    def forward(self, x, to_tensor=False):
+        out = None
+        for i, net in enumerate(self.networks):
+            if self.only_bias_first and i != 0:
+                y = net.forward(x[..., :-1], to_tensor=False)
+            else:
+                y = net.forward(x, to_tensor=False)
+            if self.output_labels is not None:
+                y = y.permute_first(*self.output_labels)
+            if out is None:
+                out = y
+            else:
+                out.tensor = out.tensor + y.tensor
+        if to_tensor:
+            out = out.tensor
+        return out
+
+    def get_A_b(self, node, grad, hessian):
+        for net in self.networks:
+            if node in net.nodes:
+                return net.get_A_b(node, grad, hessian)
+        raise ValueError("Node not found in any network")
+    
+    def reset_stacks(self, node=None):
+        for net in self.networks:
+            net.reset_stacks(node)
+    
+    def recompute_all_stacks(self):
+        for net in self.networks:
+            net.recompute_all_stacks()
+    
+    def orthonormalize_left(self):
+        for net in self.networks:
+            net.orthonormalize_left()
+
+    def orthonormalize_right(self):
+        for net in self.networks:
+            net.orthonormalize_right()
+    
+    def node_orthonormalize_left(self, node):
+        for net in self.networks:
+            if node in net.main_nodes:
+                net.node_orthonormalize_left(node)
+
+    def node_orthonormalize_right(self, node):
+        for net in self.networks:
+            if node in net.main_nodes:
+                net.node_orthonormalize_right(node)
+    
+    def left_update_stacks(self, node):
+        raise NotImplementedError("left_update_stacks not implemented for SumOfNetworks")
+    
+    def right_update_stacks(self, node):
+        raise NotImplementedError("right_update_stacks not implemented for SumOfNetworks")

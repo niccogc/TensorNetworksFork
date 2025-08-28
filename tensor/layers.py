@@ -7,12 +7,15 @@ from collections import defaultdict
 from tensor.data_compression import train_concat
 
 class MainNodeLayer(nn.Module):
-    def __init__(self, N, r, f, output_shape=tuple(), down_label='p', constrict_bond=True, perturb=False, dtype=None):
+    def __init__(self, N, r, f, output_shape=tuple(), down_label='p', horizontal_label='r{0}', constrict_bond=True, perturb=False, dtype=None):
         """Creates the main nodes for the layer."""
         super(MainNodeLayer, self).__init__()
         output_shape = output_shape if isinstance(output_shape, tuple) else (output_shape,)
         labels = ['s']
         nodes = []
+
+        if N == 1:
+            r = 1
 
         def build_left(b0, f, R, right=0):
             mx = min(R, b0*f) if constrict_bond else R
@@ -68,6 +71,8 @@ class MainNodeLayer(nn.Module):
                     left_stack.append(build_left(left_r, f, r))
                 else:
                     right_stack.insert(0, build_right(r, f, right_r))
+        if N == 1:
+            middle = [b0]
 
         for i in range(1, N+1):
             if i-1 < len(output_shape):
@@ -78,14 +83,13 @@ class MainNodeLayer(nn.Module):
                 up = 1
                 up_label = 'c'
             down = f
-            left_label = f'r{i}'
-            right_label = f'r{i+1}'
+            left_label = horizontal_label.format(i)
+            right_label = horizontal_label.format(i+1)
 
             node_input = middle[i-1]
             if not perturb:
                 left, right = node_input
                 node_input = (left, up, down, right)
-
             node = TensorNode(node_input, [left_label, up_label, down_label.format(i), right_label], l=left_label, r=right_label, name=f"A{i}", dtype=dtype)
             nodes.append(node)
 

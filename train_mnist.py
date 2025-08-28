@@ -1,6 +1,6 @@
 #%%
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 import torch
 torch.set_default_dtype(torch.float64)
 import numpy as np
@@ -53,24 +53,24 @@ y_test = np.eye(10)[y_test.numpy()]
 #%%
 tt = TensorTrainRegressor(
     num_swipes=20,
-    eps_start=1.0,
+    eps_start=1e-12,
     eps_end=1e-12,
-    N=3,
+    N=5,
     r=8,
-    linear_dim=10,
+    linear_dim=16,
     output_dim=10,
-    batch_size=512,
+    batch_size=2048,
     constrict_bond=False,
+    perturb=False,
     seed=42,
     device='cuda',
     bf=AutogradLoss(torch.nn.MSELoss(reduction='none')),
     lr=1.0,
     method="ridge_cholesky",
-    model_type="tt",
-    verbose=3
+    model_type="tt_type1_bias_first_no_train_linear", #tt_type1_bias_first_no_train_linear
+    verbose=1
 )
 tt.fit(X_train, y_train)
-#%%
 # evaluate on the test set
 y_pred_test = tt.predict(X_test)
 r2_test = r2_score(y_test, y_pred_test)

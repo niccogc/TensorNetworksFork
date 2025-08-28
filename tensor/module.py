@@ -3,7 +3,8 @@ from time import time
 import torch
 from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.metrics import r2_score, root_mean_squared_error
-from tensor.layers import TensorTrainLayer, TensorTrainLinearLayer, CPDLayer
+from tensor.layers import TensorTrainLayer, TensorTrainLinearLayer, TensorNetworkLayer, CPDLayer
+from tensor.network import SumOfNetworks
 from tensor.bregman import SquareBregFunction
 
 def root_mean_squared_error_torch(y_true, y_pred):
@@ -46,7 +47,7 @@ class EarlyStopping:
         # Compute losses
         y_pred_val = self.model_predict(self.X_val)
         val_loss = self.loss_fn(self.y_val, y_pred_val)
-        
+
         self.val_history[self.cur_degree] = val_loss
         self.time_history[self.cur_degree] = elapsed_time
 
@@ -99,10 +100,10 @@ class EarlyStopping:
         }
 
 class TensorTrainRegressor(BaseEstimator, RegressorMixin):
-    def __init__(self, N=2, r=2, output_dim=1, linear_dim=None,  
+    def __init__(self, N=2, r=2, output_dim=1, linear_dim=None,
                  constrict_bond=True, perturb=True, seed=42,
                  device='cuda', bf=None,
-                 lr=1.0, eps_start=1e-12, eps_end=1e-12, 
+                 lr=1.0, eps_start=1e-12, eps_end=1e-12,
                  batch_size=512, method='ridge_cholesky',
                  num_swipes=5,
                  model_type='tt',
@@ -126,9 +127,11 @@ class TensorTrainRegressor(BaseEstimator, RegressorMixin):
         self.num_swipes = num_swipes
         self.model_type = model_type
         self.verbose = verbose
-        
+
         self._model = None
-        
+        if self.perturb and self.output_dim > 1:
+            raise ValueError("perturb not supported for output dim > 1")
+
     def _initialize_model(self):
         if self.input_dim is None:
             raise ValueError("input_dim must be set")
@@ -137,8 +140,33 @@ class TensorTrainRegressor(BaseEstimator, RegressorMixin):
                                    output_shape=self.output_dim,
                                    perturb=self.perturb,
                                    seed=self.seed).to(self.device)
+        elif self.model_type.startswith('tt_type1'):
+            if self.linear_dim is None or self.linear_dim >= self.input_dim:
+                train_layers = [TensorTrainLayer(
+                                    i,
+                                    bond_dim=self.r,
+                                    input_features=self.input_dim-1 if 'bias_first' in self.model_type and i != 1 else self.input_dim,
+                                    output_shape=self.output_dim,
+                                    constrict_bond=self.constrict_bond,
+                                    perturb=self.perturb,
+                                    seed=self.seed + i
+                                ).tensor_network for i in range(1, self.N+1)]
+                self._model = TensorNetworkLayer(SumOfNetworks(train_layers, only_bias_first='bias_first' in self.model_type, output_labels=train_layers[0].output_labels, train_linear=not ('_no_train_linear' in self.model_type))).to(self.device)
+            else:
+                train_layers = [TensorTrainLinearLayer(
+                                i,
+                                bond_dim=self.r,
+                                input_features=self.input_dim-1 if 'bias_first' in self.model_type and i != 1 else self.input_dim,
+                                linear_dim=self.linear_dim,
+                                output_shape=self.output_dim,
+                                constrict_bond=self.constrict_bond,
+                                perturb=self.perturb,
+                                seed=self.seed + i
+                            ).tensor_network for i in range(1, self.N+1)]
+                self._model = TensorNetworkLayer(SumOfNetworks(train_layers, only_bias_first='bias_first' in self.model_type, output_labels=train_layers[0].output_labels, train_linear=not ('_no_train_linear' in self.model_type))).to(self.device)
+
         elif self.linear_dim is None or self.linear_dim >= self.input_dim:
-            self._model = TensorTrainLayer(self.N, self.r, self.input_dim, 
+            self._model = TensorTrainLayer(self.N, self.r, self.input_dim,
                                            output_shape=self.output_dim,
                                            constrict_bond=self.constrict_bond,
                                            perturb=self.perturb,
@@ -151,8 +179,8 @@ class TensorTrainRegressor(BaseEstimator, RegressorMixin):
                                                  seed=self.seed).to(self.device)
         if self.verbose > 2:
             print("Number of parameters:", self._model.num_parameters())
-    
-    def fit(self, X, y):
+
+    def fit(self, X, y, X_val=None, y_val=None, validation_split=0.1, split_train=True, val_batch_size=64):
         # X, y: numpy arrays or torch tensors
         if isinstance(X, np.ndarray):
             X = torch.tensor(X, dtype=torch.float64, device=self.device)
@@ -164,26 +192,61 @@ class TensorTrainRegressor(BaseEstimator, RegressorMixin):
 
         # Append 1 to X for bias term
         X = torch.cat((X, torch.ones((X.shape[0], 1), dtype=torch.float64, device=self.device)), dim=1)
-        
+
         if self._model is None:
             self.input_dim = X.shape[1]
             self._initialize_model()
         
-        # define convergence criterion function for progress printing
-        if self.verbose > 4:
-            def convergence_criterion():
-                y_pred_train = self._model(X)
-                rmse = torch.sqrt(torch.mean((y_pred_train - y)**2))
-                if self.verbose > 0:
-                    print('Train RMSE:', rmse.item())
-                return False
+        if self.verbose > 0:
+            print("Number of parameters:", self._model.num_parameters())
+
+        # Validation split if not provided
+        if X_val is None or y_val is None:
+            if split_train:
+                n = X.shape[0]
+                idx = np.arange(n)
+                rng = np.random.RandomState(self.seed)
+                rng.shuffle(idx)
+                split = int(n * (1 - validation_split))
+                train_idx, val_idx = idx[:split], idx[split:]
+                X_train, X_val = X[train_idx], X[val_idx]
+                y_train, y_val = y[train_idx], y[val_idx]
+            else:
+                X_train, y_train = X, y
+                X_val, y_val = X, y
         else:
-            def convergence_criterion():
-                return False
-        
+            if isinstance(X_val, np.ndarray):
+                X_val = torch.tensor(X_val, dtype=torch.float64, device=self.device)
+            if isinstance(y_val, np.ndarray):
+                y_val = torch.tensor(y_val, dtype=torch.float64, device=self.device)
+            if y_val.ndim == 1:
+                y_val = y_val.unsqueeze(1)
+            X_train, y_train = X, y
+
+        # define convergence criterion function for progress printing
+        epoch = 0
+        self.trajectory = []
+        def convergence_criterion():
+            nonlocal epoch
+            epoch += 1
+            log_dict = {'epoch': epoch}
+            y_pred_val = self._model.tensor_network.forward_batch(X_val, val_batch_size)
+            rmse = torch.sqrt(torch.mean((y_pred_val - y_val)**2)).item()
+            log_dict['val_rmse'] = rmse
+            # If more than 1 output dim, also print accuracy
+            if y_val.shape[1] > 1:
+                y_pred_labels = torch.argmax(y_pred_val, dim=1)
+                y_true_labels = torch.argmax(y_val, dim=1)
+                accuracy = (y_pred_labels == y_true_labels).float().mean().item()
+                log_dict['val_accuracy'] = accuracy
+            if self.verbose > 0:
+                print(", ".join([f"{k}: {v:.4f}" if isinstance(v, float) else f"{k}: {v}" for k, v in log_dict.items()]))
+            self.trajectory.append(log_dict)
+            return False
+
         # Call accumulating_swipe
         self._model.tensor_network.accumulating_swipe(
-            X, y, self.bf,
+            X_train, y_train, self.bf,
             batch_size=self.batch_size,
             lr=self.lr,
             eps=self.epss,
@@ -197,9 +260,9 @@ class TensorTrainRegressor(BaseEstimator, RegressorMixin):
             disable_tqdm=self.verbose < 3,
             eps_per_node=(self.num_swipes == 1) and (len(self.epss) == self.N)
         )
-        
+
         return self
-    
+
     def predict(self, X):
         if isinstance(X, np.ndarray):
             X = torch.tensor(X, dtype=torch.float64, device=self.device)
@@ -207,7 +270,7 @@ class TensorTrainRegressor(BaseEstimator, RegressorMixin):
         X = torch.cat((X, torch.ones(X.shape[0], 1, dtype=torch.float64, device=self.device)), dim=1)
         y_pred = self._model(X)
         return y_pred.detach().cpu().numpy()
-    
+
     def score(self, X, y_true):
         # Return R2 score on X, y_true
         if isinstance(X, np.ndarray):
@@ -312,7 +375,7 @@ class TensorTrainRegressorEarlyStopping(TensorTrainRegressor):
         # Restore best state if available
         if best_state_dict is not None:
             self._model.load_node_states(best_state_dict, set_value=True)
-        
+
         # # Now train for a couple of swipes across the best degree blocks
         # self._model.tensor_network.accumulating_swipe(
         #     X_train, y_train, self.bf,
@@ -330,5 +393,5 @@ class TensorTrainRegressorEarlyStopping(TensorTrainRegressor):
         #     direction='l2r',
         #     disable_tqdm=True
         # )
-        
+
         return self

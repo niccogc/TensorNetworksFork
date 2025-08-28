@@ -61,7 +61,7 @@ plt.plot(epss)
 
 N = 7
 r = 8
-CB = 4
+CB = -1
 
 def convergence_criterion(*args):
     y_pred_test = layer(xinp_test)
