@@ -22,7 +22,7 @@ import time
 import pandas as pd
 from tqdm import tqdm
 
-from data.polynomials import RandomPolynomial, RandomPolynomialRange, RandomIndependentPolynomial
+from data import RandomPolynomial, RandomPolynomialRange, RandomIndependentPolynomial
 
 def get_data(d, degree, num_train_points, num_val_points, num_test_points, random_state=42):
     rng = np.random.default_rng(random_state)

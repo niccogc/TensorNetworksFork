@@ -12,7 +12,7 @@ transform = transforms.Compose([
     transforms.Normalize((0.1307,), (0.3081,))
 ])
 
-train_dataset = torchvision.datasets.MNIST(root="/work3/s183995/MNIST/data", train=True, transform=transform, download=True)
+train_dataset = torchvision.datasets.MNIST(root="/work3/aveno/MNIST/data", train=True, transform=transform, download=True)
 train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=64, shuffle=True)
 
 train_samples = []
@@ -33,7 +33,7 @@ xinp_train[..., -1, -1] = 1.0
 y_train = F.one_hot(y_train, num_classes=10).to(dtype=torch.float64).cuda()
 
 
-test_dataset = torchvision.datasets.MNIST(root="/work3/s183995/MNIST/data", train=False, transform=transform, download=True)
+test_dataset = torchvision.datasets.MNIST(root="/work3/aveno/MNIST/data", train=False, transform=transform, download=True)
 test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=64, shuffle=True)
 test_samples = []
 test_labels = []
@@ -83,5 +83,5 @@ with torch.inference_mode():
     #del y_pred
 bf = XEAutogradBregman(w=w)
 #%%
-layer.tensor_network.accumulating_swipe(xinp_train, y_train, bf, batch_size=512, delta=3.0, lr=1.0, convergence_criterion=convergence_criterion, orthonormalize=False, method='ridge_exact', eps=epss, verbose=2, num_swipes=num_swipes)
+layer.tensor_network.accumulating_swipe(xinp_train, y_train, bf, batch_size=512, lr=1.0, convergence_criterion=convergence_criterion, orthonormalize=False, method='ridge_exact', eps=epss, verbose=2, num_swipes=num_swipes)
 #%%

@@ -1,6 +1,6 @@
 #%%
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 import torch
 torch.set_default_dtype(torch.float64)
 import numpy as np
@@ -12,122 +12,72 @@ def root_mean_squared_error_torch(y_true, y_pred):
     return root_mean_squared_error(y_true, y_pred)
 
 from tensor.bregman import SquareBregFunction, AutogradLoss
-from tensor.module import TensorTrainRegressorEarlyStopping, EarlyStopping
+from tensor.module import TensorTrainRegressor, EarlyStopping
 from tensor.layers import CPDLayer, TensorTrainLayer
 from scipy import special
 from sklearn.preprocessing import PolynomialFeatures
 import math
 import time
 
-from data import RandomPolynomial, RandomPolynomialRange, RandomIndependentPolynomial
+from torchvision import datasets
+from sklearn.preprocessing import QuantileTransformer
 
-def get_data(d, degree, num_train_points, num_val_points, num_test_points, random_state=42, add_noise=0.1):
-    rng = np.random.default_rng(random_state)
-    X_train = rng.uniform(-1, 1, size=(num_train_points, d)) #rng.normal(1, 0.1, size=(num_train_points, d))
-    X_val = rng.uniform(-1, 1, size=(num_val_points, d)) #rng.normal(1, 0.1, size=(num_val_points, d))
-    X_test = rng.uniform(-1, 1, size=(num_test_points, d)) #rng.normal(1, 0.3, size=(num_test_points, d))
+# Download and load entire MNIST dataset
+train_dataset = datasets.MNIST(
+    root="/work3/aveno/MNIST",
+    train=True,
+    download=True,
+)
 
-    # poly = RandomPolynomial(
-    #     d=d,
-    #     degree=degree,
-    #     sigma0=0.02,
-    #     r=1,
-    #     include_bias=True,
-    #     interaction_only=False,
-    #     random_state=random_state
-    # )
-    poly = RandomPolynomialRange(
-        d=d,
-        degree=degree,
-        input_range=(-1, 1),
-        random_state=random_state
-    )
-    # poly = RandomIndependentPolynomial(
-    #     d=d,
-    #     degree=degree,
-    #     coeff_sigma=5,
-    #     r=1,
-    #     include_bias=True,
-    #     interaction_only=False,
-    #     random_state=random_state
-    # )
-    y_train = poly.evaluate(X_train, add_noise=add_noise)
-    y_val = poly.evaluate(X_val, add_noise=add_noise)
-    y_test = poly.evaluate(X_test)
+test_dataset = datasets.MNIST(
+    root="/work3/aveno/MNIST",
+    train=False,
+    download=True,
+)
 
-    if y_train.ndim == 1:
-        y_train = y_train.reshape(-1, 1)
-    if y_val.ndim == 1:
-        y_val = y_val.reshape(-1, 1)
-    if y_test.ndim == 1:
-        y_test = y_test.reshape(-1, 1)
+# Access the data and targets directly as tensors
+X_train, y_train = train_dataset.data, train_dataset.targets
+X_test, y_test = test_dataset.data, test_dataset.targets
 
-    return X_train, y_train, X_val, y_val, X_test, y_test
+# Flatten X and normalize using QuantileTransformer(output_distribution="uniform")
+X_train = X_train.view(X_train.size(0), -1).numpy() / 255.0
+X_test = X_test.view(X_test.size(0), -1).numpy() / 255.0
 
-def evaluate_tensor_train(
-    X_train, y_train,
-    X_val, y_val,
-    X_test, y_test,
-    max_degree,      # formerly "carriages"
-    rank,
-    eps_start=1e-12,
+X_quant = QuantileTransformer(output_distribution="uniform")
+X_train = X_quant.fit_transform(X_train)
+X_test = X_quant.transform(X_test)
+
+# One-hot encode y
+y_train = np.eye(10)[y_train.numpy()]
+y_test = np.eye(10)[y_test.numpy()]
+#%%
+tt = TensorTrainRegressor(
+    num_swipes=20,
+    eps_start=1.0,
     eps_end=1e-12,
-    early_stopping=5,
-    split_train=False,
-    constrain_bond=False,
-    method='ridge_cholesky',
-    model_type='tt',
-    random_state=42,
-    verbose=0
-):
-    if max_degree > 2:
-        tt = TensorTrainRegressorEarlyStopping(
-            num_swipes=1,
-            eps_start=eps_start,
-            eps_end=eps_end,
-            early_stopping=early_stopping,
-            rel_err=1e-4,
-            abs_err=1e-6,
-            split_train=split_train,
-            N=max_degree,
-            r=rank,
-            output_dim=1,
-            batch_size=-1,
-            constrict_bond=constrain_bond,
-            seed=random_state,
-            device='cuda',
-            bf=SquareBregFunction(),
-            lr=1.0,
-            method=method,
-            model_type=model_type,
-            verbose=verbose
-        )
-        #try:
-        # pass validation data into fit()
-        tt.fit(X_train, y_train, X_val=X_val, y_val=y_val)
-        singular = tt._singular
-        # except Exception as e:
-        #     singular = True
-        #     print(f"Error during fitting: {e}")
-
-        # evaluate on the test set
-        y_pred_test = tt.predict(X_test)
-        r2_test = r2_score(y_test, y_pred_test)
-        rmse_test = root_mean_squared_error(y_test, y_pred_test)
-        best_degree = tt._best_degree
-        num_params = sum(p.tensor.numel() for i, p in enumerate(tt._model.tensor_network.train_nodes) if i < tt._best_degree)
-        val_history = tt._early_stopping.val_history
-        time_history = tt._early_stopping.time_history
-    else:
-        tt = None
-        singular = True
-        best_degree = np.nan
-        r2_test = np.nan
-        rmse_test = np.nan
-        num_params = None
-        val_history = None
-
-    return r2_test, rmse_test, singular, tt, best_degree, num_params, val_history, time_history
+    N=3,
+    r=8,
+    linear_dim=10,
+    output_dim=10,
+    batch_size=512,
+    constrict_bond=False,
+    seed=42,
+    device='cuda',
+    bf=AutogradLoss(torch.nn.MSELoss(reduction='none')),
+    lr=1.0,
+    method="ridge_cholesky",
+    model_type="tt",
+    verbose=3
+)
+tt.fit(X_train, y_train)
+#%%
+# evaluate on the test set
+y_pred_test = tt.predict(X_test)
+r2_test = r2_score(y_test, y_pred_test)
+rmse_test = root_mean_squared_error(y_test, y_pred_test)
+accuracy = np.mean(np.argmax(y_test, axis=1) == np.argmax(y_pred_test, axis=1))
+print("R2 test:", r2_test, "RMSE test:", rmse_test, "Accuracy:", accuracy)
+#%%
 
 def fit_poly_mononomial(X, y, degree, include_bias=True):
     """
@@ -473,11 +423,11 @@ def evaluate_tt_full(
 
 #%%
 X_train, y_train, X_val, y_val, X_test, y_test = get_data(
-    d=1,
-    degree=3,
-    num_train_points=4,
-    num_val_points=4,
-    num_test_points=1000,
+    d=7,
+    degree=10,
+    num_train_points=50*70,
+    num_val_points=50*70,
+    num_test_points=10000,
     random_state=42,
     add_noise=0.0
 )
@@ -610,7 +560,7 @@ import pandas as pd
 from tqdm import tqdm
 
 eps = 3e-13
-def collect_results(seeds=range(42, 42+5), degree=3, d=1, rank=24, cpd_rank=100, max_degree=10, eps=3e-13, one_value_only=False):
+def collect_results(seeds=range(42, 42+20), degree=3, d=1, rank=24, cpd_rank=100, max_degree=10, eps=3e-13, one_value_only=False):
     rows = []
     n_values = [math.comb(i+d, d) for i in range(degree,degree+5)]
     if one_value_only:
@@ -743,11 +693,11 @@ def collect_results(seeds=range(42, 42+5), degree=3, d=1, rank=24, cpd_rank=100,
 # print(len(df), "rows")
 parameters = [
     {'degree': 3, 'max_degree': 8, 'd': 1, 'rank': 6, 'cpd_rank': 100},
-    # {'degree': 3, 'max_degree': 8, 'd': 3, 'rank': 12, 'cpd_rank': 100},
-    # {'degree': 3, 'max_degree': 8, 'd': 7, 'rank': 24, 'cpd_rank': 100},
-    # {'degree': 5, 'max_degree': 10, 'd': 1, 'rank': 6, 'cpd_rank': 100},
-    # {'degree': 5, 'max_degree': 10, 'd': 3, 'rank': 12, 'cpd_rank': 100},
-    # {'degree': 5, 'max_degree': 10, 'd': 7, 'rank': 24, 'cpd_rank': 100},
+    {'degree': 3, 'max_degree': 8, 'd': 3, 'rank': 12, 'cpd_rank': 100},
+    {'degree': 3, 'max_degree': 8, 'd': 7, 'rank': 24, 'cpd_rank': 100},
+    {'degree': 5, 'max_degree': 10, 'd': 1, 'rank': 6, 'cpd_rank': 100},
+    {'degree': 5, 'max_degree': 10, 'd': 3, 'rank': 12, 'cpd_rank': 100},
+    {'degree': 5, 'max_degree': 10, 'd': 7, 'rank': 24, 'cpd_rank': 100},
 ]
 #%%
 # MARK: Train here
@@ -766,15 +716,15 @@ for params in parameters:
     df['max_degree'] = params['max_degree']
     all_dfs.append(df)
     # Save to csv
-    #df.to_csv(f"results_d{params['d']}_deg{params['degree']}_rank{params['rank']}_cpdrank{params['cpd_rank']}.csv", index=False)
+    df.to_csv(f"results_d{params['d']}_deg{params['degree']}_rank{params['rank']}_cpdrank{params['cpd_rank']}.csv", index=False)
 #%%
 # Now that all are saved, load them and plot them, one for each df:
 # Load from csv
-# import pandas as pd
-# all_dfs = []
-# for params in parameters:
-#     df = pd.read_csv(f"results_d{params['d']}_deg{params['degree']}_rank{params['rank']}_cpdrank{params['cpd_rank']}.csv")
-#     all_dfs.append(df)
+import pandas as pd
+all_dfs = []
+for params in parameters:
+    df = pd.read_csv(f"results_d{params['d']}_deg{params['degree']}_rank{params['rank']}_cpdrank{params['cpd_rank']}.csv")
+    all_dfs.append(df)
 #%%
 import seaborn as sns
 import matplotlib.pyplot as plt

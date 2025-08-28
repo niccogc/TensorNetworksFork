@@ -149,6 +149,8 @@ class TensorTrainRegressor(BaseEstimator, RegressorMixin):
                                                  constrict_bond=self.constrict_bond,
                                                  perturb=self.perturb,
                                                  seed=self.seed).to(self.device)
+        if self.verbose > 2:
+            print("Number of parameters:", self._model.num_parameters())
     
     def fit(self, X, y):
         # X, y: numpy arrays or torch tensors
@@ -168,12 +170,16 @@ class TensorTrainRegressor(BaseEstimator, RegressorMixin):
             self._initialize_model()
         
         # define convergence criterion function for progress printing
-        def convergence_criterion():
-            y_pred_train = self._model(X)
-            rmse = torch.sqrt(torch.mean((y_pred_train - y)**2))
-            if self.verbose > 0:
-                print('Train RMSE:', rmse.item())
-            return False
+        if self.verbose > 4:
+            def convergence_criterion():
+                y_pred_train = self._model(X)
+                rmse = torch.sqrt(torch.mean((y_pred_train - y)**2))
+                if self.verbose > 0:
+                    print('Train RMSE:', rmse.item())
+                return False
+        else:
+            def convergence_criterion():
+                return False
         
         # Call accumulating_swipe
         self._model.tensor_network.accumulating_swipe(
@@ -188,7 +194,7 @@ class TensorTrainRegressor(BaseEstimator, RegressorMixin):
             num_swipes=self.num_swipes,
             skip_second=False,
             direction='l2r',
-            disable_tqdm=True,
+            disable_tqdm=self.verbose < 3,
             eps_per_node=(self.num_swipes == 1) and (len(self.epss) == self.N)
         )
         
