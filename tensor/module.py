@@ -1,5 +1,6 @@
 import numpy as np
 from time import time
+from functools import partial
 import torch
 from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.metrics import r2_score, root_mean_squared_error
@@ -129,6 +130,7 @@ class TensorTrainRegressor(BaseEstimator, RegressorMixin):
         self.verbose = verbose
 
         self._model = None
+        self.trajectory = []
         if self.perturb and self.output_dim > 1:
             raise ValueError("perturb not supported for output dim > 1")
 
@@ -180,7 +182,7 @@ class TensorTrainRegressor(BaseEstimator, RegressorMixin):
         if self.verbose > 2:
             print("Number of parameters:", self._model.num_parameters())
 
-    def fit(self, X, y, X_val=None, y_val=None, validation_split=0.1, split_train=True, val_batch_size=64):
+    def fit(self, X, y, X_val=None, y_val=None, validation_split=0.1, split_train=True):
         # X, y: numpy arrays or torch tensors
         if isinstance(X, np.ndarray):
             X = torch.tensor(X, dtype=torch.float64, device=self.device)
@@ -230,7 +232,7 @@ class TensorTrainRegressor(BaseEstimator, RegressorMixin):
             nonlocal epoch
             epoch += 1
             log_dict = {'epoch': epoch}
-            y_pred_val = self._model.tensor_network.forward_batch(X_val, val_batch_size)
+            y_pred_val = self._model.tensor_network.forward_batch(X_val, self.batch_size)
             rmse = torch.sqrt(torch.mean((y_pred_val - y_val)**2)).item()
             log_dict['val_rmse'] = rmse
             # If more than 1 output dim, also print accuracy
@@ -340,7 +342,7 @@ class TensorTrainRegressorEarlyStopping(TensorTrainRegressor):
 
         self._early_stopping = EarlyStopping(
             X_train, y_train, X_val, y_val,
-            model_predict=self._model,
+            model_predict=partial(self._model.tensor_network.forward_batch, batch_size=self.batch_size),
             get_model_weights=lambda: self._model.node_states(),
             loss_fn=root_mean_squared_error_torch,
             abs_err=self.abs_err,

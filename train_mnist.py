@@ -53,7 +53,7 @@ y_test = np.eye(10)[y_test.numpy()]
 #%%
 tt = TensorTrainRegressor(
     num_swipes=20,
-    eps_start=1e-12,
+    eps_start=1.0,
     eps_end=1e-12,
     N=5,
     r=8,
@@ -68,7 +68,7 @@ tt = TensorTrainRegressor(
     lr=1.0,
     method="ridge_cholesky",
     model_type="tt_type1_bias_first_no_train_linear", #tt_type1_bias_first_no_train_linear
-    verbose=1
+    verbose=3 # 1
 )
 tt.fit(X_train, y_train)
 # evaluate on the test set
