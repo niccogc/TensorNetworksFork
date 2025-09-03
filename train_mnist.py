@@ -11,7 +11,7 @@ def root_mean_squared_error_torch(y_true, y_pred):
     y_pred = y_pred.cpu().numpy()
     return root_mean_squared_error(y_true, y_pred)
 
-from tensor.bregman import SquareBregFunction, AutogradLoss
+from tensor.bregman import SquareBregFunction, AutogradLoss, XEAutogradBregman
 from tensor.module import TensorTrainRegressor, EarlyStopping
 from tensor.layers import CPDLayer, TensorTrainLayer
 from scipy import special
@@ -55,11 +55,11 @@ tt = TensorTrainRegressor(
     num_swipes=20,
     eps_start=1.0,
     eps_end=1e-12,
-    N=5,
-    r=8,
-    linear_dim=16,
+    N=3,
+    r=4,
+    linear_dim=None,
     output_dim=10,
-    batch_size=2048,
+    batch_size=512,
     constrict_bond=False,
     perturb=False,
     seed=42,
@@ -67,8 +67,8 @@ tt = TensorTrainRegressor(
     bf=AutogradLoss(torch.nn.MSELoss(reduction='none')),
     lr=1.0,
     method="ridge_cholesky",
-    model_type="tt_type1_bias_first_no_train_linear", #tt_type1_bias_first_no_train_linear
-    verbose=3 # 1
+    model_type="cpd", #tt_type1_bias_first_no_train_linear
+    verbose=1 # 1
 )
 tt.fit(X_train, y_train)
 # evaluate on the test set
@@ -77,6 +77,16 @@ r2_test = r2_score(y_test, y_pred_test)
 rmse_test = root_mean_squared_error(y_test, y_pred_test)
 accuracy = np.mean(np.argmax(y_test, axis=1) == np.argmax(y_pred_test, axis=1))
 print("R2 test:", r2_test, "RMSE test:", rmse_test, "Accuracy:", accuracy)
+num_params = tt._model.num_parameters()
+#%%
+import numpy as np
+import pandas as pd
+data = []
+for traj in tt.trajectory:
+    data.append((traj['epoch'], traj['val_rmse'], traj['val_accuracy']))
+
+df = pd.DataFrame(data, columns=['Epoch', 'Val RMSE', 'Val Accuracy'])
+df.to_csv(f'tt_{tt.model_type}_N{tt.N}_r{tt.r}_ld{tt.linear_dim}_swipes{tt.num_swipes}_P{num_params}_fit_mnist.csv', index=False)
 #%%
 
 def fit_poly_mononomial(X, y, degree, include_bias=True):
@@ -421,48 +431,6 @@ def evaluate_tt_full(
 
 
 
-#%%
-X_train, y_train, X_val, y_val, X_test, y_test = get_data(
-    d=7,
-    degree=10,
-    num_train_points=50*70,
-    num_val_points=50*70,
-    num_test_points=10000,
-    random_state=42,
-    add_noise=0.0
-)
-#%%
-tt_r2, tt_rmse, tt_singular, tt_model, tt_degree, tt_params, tt_history, tt_time_history = evaluate_tensor_train(
-    X_train, y_train,
-    X_val, y_val,
-    X_test, y_test,
-    early_stopping=20,
-    max_degree=20,
-    rank=24,
-    eps_start=1e-12,#1e4, #1e-10
-    eps_end=1e-12,#1e-10, #1e-4
-    #eps_start=1e-10,#1e4, #1e-10
-    #eps_end=1e-4,#1e-10, #1e-4
-    split_train=False,
-    random_state=46,
-    verbose=2
-)
-print(f"TT R2: {tt_r2}, RMSE: {tt_rmse}, Degree: {tt_degree}, Params: {tt_params}, Singular: {tt_singular}")
-
-#%%
-# Fit polynomial regression
-poly_r2, poly_rmse, poly_model, poly_coeffs, poly_degree, poly_params, poly_rank, poly_history, poly_time_history = evaluate_polynomial_regression(
-    X_train, y_train,
-    X_val, y_val,
-    X_test, y_test,
-    max_degree=10,
-    d=5,
-    abs_err=1e-5,
-    rel_err=1e-4,
-    early_stopping=10,
-    verbose=2
-)
-print(f"Poly R2: {poly_r2}, RMSE: {poly_rmse}, Degree: {poly_degree}, Params: {poly_params}")
 #%%
 cpd_r2, cpd_rmse, cpd_singular, cpd_model, cpd_degree, cpd_params, cpd_history, cpd_time_history = evaluate_cpd(
     X_train, y_train,

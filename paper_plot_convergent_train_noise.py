@@ -96,7 +96,7 @@ def evaluate_tensor_train(
             constrict_bond=constrain_bond,
             seed=random_state,
             device='cuda',
-            bf=SquareBregFunction(),
+            bf=AutogradLoss(torch.nn.MSELoss(reduction='none')),
             lr=1.0,
             method=method,
             model_type=model_type,
@@ -493,6 +493,7 @@ tt_r2, tt_rmse, tt_singular, tt_model, tt_degree, tt_params, tt_history, tt_time
     eps_end=1e-12,#1e-10, #1e-4
     #eps_start=1e-10,#1e4, #1e-10
     #eps_end=1e-4,#1e-10, #1e-4
+    method='ridge_trace',
     split_train=False,
     random_state=46,
     verbose=2

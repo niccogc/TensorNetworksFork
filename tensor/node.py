@@ -172,7 +172,7 @@ class TensorNode:
 
     def copy(self):
         """Returns a copy of the node. Doesn't copy connections."""
-        node = TensorNode(self.tensor, self.dim_labels.copy(), l=self.left_labels.copy(), r=self.right_labels.copy(), name=self.name)
+        node = TensorNode(self.tensor, self.dim_labels.copy(), l=self.left_labels.copy(), r=self.right_labels.copy(), name=self.name+'_c')
         return node
 
     def update_node(self, step, lr=1.0, adaptive_step=False, min_norm=None, max_norm=None):
@@ -274,7 +274,6 @@ class TensorNode:
                 if next_node in exclude or next_node in visited:
                     continue
                 if label not in current.left_labels + current.right_labels:
-                    print('HERE', current, label, current.left_labels, current.right_labels)
                     queue.append(next_node)
         return order
 

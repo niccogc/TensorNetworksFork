@@ -1,6 +1,7 @@
 #%%
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+import numpy as np
 import torch
 import torchvision
 import torchvision.transforms as transforms
@@ -32,6 +33,17 @@ xinp_train = torch.cat((xinp_train, torch.zeros((xinp_train.shape[0], xinp_train
 xinp_train[..., -1, -1] = 1.0
 y_train = F.one_hot(y_train, num_classes=10).to(dtype=torch.float64).cuda()
 
+# Do a random split of train into train and val
+seed = 42
+validation_split = 0.1
+n = xinp_train.shape[0]
+idx = np.arange(n)
+rng = np.random.RandomState(seed)
+rng.shuffle(idx)
+split = int(n * (1 - validation_split))
+train_idx, val_idx = idx[:split], idx[split:]
+xinp_train, xinp_val = xinp_train[train_idx], xinp_train[val_idx]
+y_train, y_val = y_train[train_idx], y_train[val_idx]
 
 test_dataset = torchvision.datasets.MNIST(root="/work3/aveno/MNIST/data", train=False, transform=transform, download=True)
 test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=64, shuffle=True)
@@ -51,23 +63,30 @@ y_test = F.one_hot(y_test, num_classes=10).to(dtype=torch.float64).cuda()
 # %%
 from tensor.layers import TensorConvolutionTrainLayer
 from tensor.bregman import XEAutogradBregman
-from sklearn.metrics import balanced_accuracy_score
+from sklearn.metrics import accuracy_score
 import numpy as np
 from matplotlib import pyplot as plt
 
-num_swipes = 10
+num_swipes = 30
 epss = np.geomspace(1.0, 1e-2, 2*num_swipes).tolist()
 plt.plot(epss)
 
-N = 7
+N = 5
 r = 8
-CB = -1
-
-def convergence_criterion(*args):
-    y_pred_test = layer(xinp_test)
-    y_pred_test = torch.cat((y_pred_test, torch.zeros_like(y_pred_test[:, :1])), dim=1)
-    accuracy_test = balanced_accuracy_score(y_test.argmax(dim=-1).cpu().numpy(), y_pred_test.argmax(dim=-1).cpu().numpy())
-    print('Test Acc:', accuracy_test)
+CB = 4
+trajectory = []
+epoch = 0
+def convergence_criterion():
+    global epoch
+    epoch += 1
+    y_pred_val = layer(xinp_val)
+    y_pred_val = torch.cat((y_pred_val, torch.zeros_like(y_pred_val[:, :1])), dim=1)
+    accuracy_test = accuracy_score(y_val.argmax(dim=-1).cpu().numpy(), y_pred_val.argmax(dim=-1).cpu().numpy())
+    trajectory.append({
+        'epoch': epoch,
+        'val_accuracy': accuracy_test
+    })
+    print(f"Epoch {epoch}, val accuracy: {accuracy_test}")
     return False
 
 # Define Bregman function
@@ -83,5 +102,14 @@ with torch.inference_mode():
     #del y_pred
 bf = XEAutogradBregman(w=w)
 #%%
-layer.tensor_network.accumulating_swipe(xinp_train, y_train, bf, batch_size=512, lr=1.0, convergence_criterion=convergence_criterion, orthonormalize=False, method='ridge_exact', eps=epss, verbose=2, num_swipes=num_swipes)
+layer.tensor_network.accumulating_swipe(xinp_train, y_train, bf, batch_size=2048, lr=1.0, convergence_criterion=convergence_criterion, orthonormalize=False, method='ridge_exact', eps=epss, verbose=2, num_swipes=num_swipes)
 #%%
+import numpy as np
+import pandas as pd
+data = []
+for traj in trajectory:
+    data.append((traj['epoch'], traj['val_accuracy']))
+
+df = pd.DataFrame(data, columns=['Epoch', 'Val Accuracy'])
+df.to_csv(f'tt_convolution_N{N}_r{r}_cb{CB}_swipes{num_swipes}_P{layer.num_parameters()}_fit_mnist.csv', index=False)
+# %%

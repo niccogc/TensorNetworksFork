@@ -225,6 +225,9 @@ class TensorTrainRegressor(BaseEstimator, RegressorMixin):
                 y_val = y_val.unsqueeze(1)
             X_train, y_train = X, y
 
+            if X_val.shape[1] != X_train.shape[1]:
+                X_val = torch.cat((X_val, torch.ones((X_val.shape[0], 1), dtype=torch.float64, device=self.device)), dim=1)
+
         # define convergence criterion function for progress printing
         epoch = 0
         self.trajectory = []
@@ -233,7 +236,7 @@ class TensorTrainRegressor(BaseEstimator, RegressorMixin):
             epoch += 1
             log_dict = {'epoch': epoch}
             y_pred_val = self._model.tensor_network.forward_batch(X_val, self.batch_size)
-            rmse = torch.sqrt(torch.mean((y_pred_val - y_val)**2)).item()
+            rmse = root_mean_squared_error_torch(y_pred_val, y_val) #torch.sqrt(torch.mean((y_pred_val - y_val)**2)).item()
             log_dict['val_rmse'] = rmse
             # If more than 1 output dim, also print accuracy
             if y_val.shape[1] > 1:
@@ -270,7 +273,7 @@ class TensorTrainRegressor(BaseEstimator, RegressorMixin):
             X = torch.tensor(X, dtype=torch.float64, device=self.device)
         # Append 1 to X for bias term
         X = torch.cat((X, torch.ones(X.shape[0], 1, dtype=torch.float64, device=self.device)), dim=1)
-        y_pred = self._model(X)
+        y_pred = self._model.tensor_network.forward_batch(X, self.batch_size)
         return y_pred.detach().cpu().numpy()
 
     def score(self, X, y_true):
@@ -281,7 +284,7 @@ class TensorTrainRegressor(BaseEstimator, RegressorMixin):
             y_true = y_true.cpu().numpy()
         # Append 1 to X for bias term
         X = torch.cat((X, torch.ones(X.shape[0], 1, dtype=torch.float64, device=self.device)), dim=1)
-        y_pred = self._model(X).squeeze().detach().cpu().numpy()
+        y_pred = self._model.tensor_network.forward_batch(X, self.batch_size).squeeze().detach().cpu().numpy()
         return r2_score(y_true, y_pred)
 
 class TensorTrainRegressorEarlyStopping(TensorTrainRegressor):

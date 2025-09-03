@@ -135,7 +135,7 @@ class TensorNetwork:
         if to_tensor:
             contracted = contracted.tensor
         return contracted
-    
+
     def forward_batch(self, x, batch_size):
         """Computes the forward pass of the network in batches."""
         data_size = len(x) if isinstance(x, torch.Tensor) else x[0].shape[0]
@@ -180,7 +180,7 @@ class TensorNetwork:
         non_broadcast_dims = tuple(d for d in self.output_labels if d != self.sample_dim)
 
         # Compute the Jacobian
-        J = self.compute_jacobian_stack(node).expand_labels(self.output_labels, grad.shape).permute_first(*broadcast_dims)
+        J = self.compute_jacobian_stack(node).copy().expand_labels(self.output_labels, grad.shape).permute_first(*broadcast_dims)
 
         # Assign unique einsum labels
         dim_labels = EinsumLabeler()
@@ -219,9 +219,7 @@ class TensorNetwork:
         non_broadcast_dims = tuple(d for d in self.output_labels if d != self.sample_dim)
 
         # Compute the Jacobian
-        J = self.compute_jacobian_stack(node)
-        J = J.expand_labels(self.output_labels, grad.shape)
-        J = J.permute_first(*broadcast_dims)
+        J = self.compute_jacobian_stack(node).copy().expand_labels(self.output_labels, grad.shape).permute_first(*broadcast_dims)
 
         # Assign unique einsum labels
         all_letters = iter(string.ascii_letters)
@@ -260,7 +258,7 @@ class TensorNetwork:
         non_broadcast_dims = tuple(d for d in self.output_labels if d != self.sample_dim)
 
         # Compute the Jacobian
-        J = self.compute_jacobian_stack(node).expand_labels(self.output_labels, grad.shape).permute_first(*broadcast_dims)
+        J = self.compute_jacobian_stack(node).copy().expand_labels(self.output_labels, grad.shape).permute_first(*broadcast_dims)
 
         # Assign unique einsum labels
         import string
@@ -452,6 +450,7 @@ class TensorNetwork:
                     loss, d_loss, sqd_loss = loss_fn.forward(y_pred, y_batch)
 
                     A, b_vec = self.get_A_b(node_l2r, d_loss, sqd_loss)
+
                     if A_out is None:
                         A_out = A
                         b_out = b_vec
@@ -953,8 +952,13 @@ class CPDNetwork(TensorNetwork):
             self.recompute_all_stacks()
         labeler = EinsumLabeler()
         out = torch.einsum(','.join([''.join([labeler[l] for l in n.dim_labels]) for n in self.node_contract.values()])+f'->{labeler[self.sample_dim]}'+''.join([labeler[l] for l in self.output_labels if l != self.sample_dim]), *[self.node_contract[n].tensor for n in self.input_nodes])
-        return TensorNode(out, dim_labels=[self.sample_dim] + [l for l in self.output_labels if l != self.sample_dim], name='O')
-    
+        node = TensorNode(out, dim_labels=[self.sample_dim] + [l for l in self.output_labels if l != self.sample_dim], name='O')
+        if self.output_labels is not None:
+            node = node.permute_first(*self.output_labels)
+        if to_tensor:
+            return node.tensor
+        return node
+
     def reset_stacks(self, node=None):
         if node is not None:
             # Update the column corresponding to this node (first get the input node)
@@ -974,8 +978,12 @@ class SumOfNetworks(TensorNetwork):
         input_nodes = []
         main_nodes = []
         train_nodes = []
-        for net in networks:
+        for i, net in enumerate(networks, 1):
+            for n in net.input_nodes:
+                n.name = f"{n.name}_n{i}"
             input_nodes.extend(net.input_nodes)
+            for n in net.main_nodes:
+                n.name = f"{n.name}_n{i}"
             main_nodes.extend(net.main_nodes)
             if train_linear:
                 train_nodes.extend(net.train_nodes)
@@ -984,14 +992,11 @@ class SumOfNetworks(TensorNetwork):
         super().__init__(input_nodes, main_nodes, train_nodes, output_labels=output_labels, sample_dim=sample_dim)
         self.networks = networks
         self.only_bias_first = only_bias_first
-    
+
     def forward(self, x, to_tensor=False):
         out = None
         for i, net in enumerate(self.networks):
-            if self.only_bias_first and i != 0:
-                y = net.forward(x[..., :-1], to_tensor=False)
-            else:
-                y = net.forward(x, to_tensor=False)
+            y = net.forward([x[..., :b.shape[1]] for b in net.input_nodes], to_tensor=False)
             if self.output_labels is not None:
                 y = y.permute_first(*self.output_labels)
             if out is None:
@@ -1007,15 +1012,15 @@ class SumOfNetworks(TensorNetwork):
             if node in net.nodes:
                 return net.get_A_b(node, grad, hessian)
         raise ValueError("Node not found in any network")
-    
+
     def reset_stacks(self, node=None):
         for net in self.networks:
             net.reset_stacks(node)
-    
+
     def recompute_all_stacks(self):
         for net in self.networks:
             net.recompute_all_stacks()
-    
+
     def orthonormalize_left(self):
         for net in self.networks:
             net.orthonormalize_left()
@@ -1023,7 +1028,7 @@ class SumOfNetworks(TensorNetwork):
     def orthonormalize_right(self):
         for net in self.networks:
             net.orthonormalize_right()
-    
+
     def node_orthonormalize_left(self, node):
         for net in self.networks:
             if node in net.main_nodes:
@@ -1033,9 +1038,9 @@ class SumOfNetworks(TensorNetwork):
         for net in self.networks:
             if node in net.main_nodes:
                 net.node_orthonormalize_right(node)
-    
+
     def left_update_stacks(self, node):
         raise NotImplementedError("left_update_stacks not implemented for SumOfNetworks")
-    
+
     def right_update_stacks(self, node):
         raise NotImplementedError("right_update_stacks not implemented for SumOfNetworks")
