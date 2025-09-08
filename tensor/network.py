@@ -166,10 +166,7 @@ class TensorNetwork:
         J = self.compute_jacobian_stack(node).expand_labels(self.output_labels, grad.shape).permute_first(*broadcast_dims)
 
         # Assign unique einsum labels
-        all_letters = iter(string.ascii_letters)
-        dim_labels = {dim: next(all_letters) for dim in self.output_labels}  # Assign letters to output dims
-        for d in non_broadcast_dims:
-            dim_labels['_' + d] = next(all_letters)
+        dim_labels = EinsumLabeler()
 
         dd_loss_ein = ''.join([dim_labels[self.sample_dim]] + [dim_labels[d] for d in non_broadcast_dims] + [dim_labels['_' + d] for d in non_broadcast_dims])
         d_loss_ein = ''.join(dim_labels[d] for d in self.output_labels)
@@ -180,16 +177,12 @@ class TensorNetwork:
         J_out2 = []
         dim_order = []
         for d in J.dim_labels:
-            if d not in dim_labels and d not in broadcast_dims:
-                dim_labels[d] = next(all_letters)
-                dim_labels['_' + d] = next(all_letters)
             J_ein1 += dim_labels[d]
             J_ein2 += dim_labels['_' + d] if d != self.sample_dim else dim_labels[d]
             if d not in broadcast_dims:
                 J_out1.append(dim_labels[d])
                 J_out2.append(dim_labels['_' + d])
                 dim_order.append(d)
-
         J_out1 = ''.join([J_out1[dim_order.index(d)] for d in node.dim_labels])
         J_out2 = ''.join([J_out2[dim_order.index(d)] for d in node.dim_labels])
 
@@ -279,7 +272,7 @@ class TensorNetwork:
 
         return b
 
-    def solve_system(self, node, A, b, method='exact', eps=0.0, eps_r=0.0, D_reg=None):
+    def solve_system(self, node, A, b, method='exact', eps=0.0):
         """Finds the update step for a given node"""
         # Solve the system
         A_f = A.flatten(0, A.ndim//2-1).flatten(1, -1)
@@ -297,22 +290,8 @@ class TensorNetwork:
             b_f = b_f + (2 * eps) * node.tensor.flatten()
             x = torch.linalg.solve(A_f, -b_f)
         elif method.lower().startswith('ridge_cholesky'):
-            #A_f.diagonal(dim1=-2, dim2=-1).add_(2 * eps)
-            if D_reg is not None:
-                D_reg_s = (D_reg + D_reg.T)
-                A_f = A_f + eps * D_reg_s
-                b_f = b_f + eps * (node.tensor.flatten() @ D_reg_s) + eps_r * torch.sgn(node.tensor.flatten())
-            elif "l1" in method.lower():
-                A_f = A_f + (2 * eps) * torch.eye(A_f.shape[-1], dtype=A_f.dtype, device=A_f.device)
-                b_f = b_f + (2 * eps) * node.tensor.flatten() + eps_r * torch.sgn(node.tensor.flatten())
-            elif 'huber' in method.lower():
-                mask = torch.abs(node.tensor.flatten()) < eps_r
-                delta = torch.where(mask, node.tensor.flatten(), 2*torch.sgn(node.tensor.flatten()))
-                A_f = A_f + (2 * eps) * torch.diag(mask.float())
-                b_f = b_f + eps * delta
-            else:
-                A_f = A_f + (2 * eps) * torch.eye(A_f.shape[-1], dtype=A_f.dtype, device=A_f.device)
-                b_f = b_f + (2 * eps) * node.tensor.flatten()
+            A_f = A_f + (2 * eps) * torch.eye(A_f.shape[-1], dtype=A_f.dtype, device=A_f.device)
+            b_f = b_f + (2 * eps) * node.tensor.flatten()
 
             L = torch.linalg.cholesky(A_f)
             x = torch.cholesky_solve(-b_f.unsqueeze(-1), L)
@@ -377,7 +356,7 @@ class TensorNetwork:
 
         return new_network
 
-    def accumulating_swipe(self, x, y_true, loss_fn, node_order=None, batch_size=-1, num_swipes=1, lr=1.0, method='exact', eps=1e-12, eps_r=0.0, D_reg_fn=lambda _: None, convergence_criterion=None, orthonormalize=False, verbose=False, skip_second=False, blocks_input=False, timeout=None, data_device=None, model_device=None, disable_tqdm=None, block_callback=None, loss_callback=None, direction='l2r', update_or_reset_stack='reset', adaptive_step=False, min_norm=None, max_norm=None):
+    def accumulating_swipe(self, x, y_true, loss_fn, node_order=None, batch_size=-1, num_swipes=1, lr=1.0, method='exact', eps=1e-12, convergence_criterion=None, orthonormalize=False, verbose=False, skip_second=False, blocks_input=False, timeout=None, data_device=None, model_device=None, disable_tqdm=None, block_callback=None, loss_callback=None, direction='l2r', update_or_reset_stack='reset', adaptive_step=False, min_norm=None, max_norm=None, eps_per_node=False):
         """Swipes the network to minimize the loss using accumulated A and b over mini-batches.
         Args:
             timeout (float or None): Maximum time in seconds to run. If None, no timeout.
@@ -413,10 +392,6 @@ class TensorNetwork:
                 eps_ = eps[NS]
             else:
                 eps_ = eps
-            if isinstance(eps_r, list):
-                eps_r_ = eps_r[NS]
-            else:
-                eps_r_ = eps_r
             # LEFT TO RIGHT
             if node_order is not None:
                 if isinstance(node_order, tuple):
@@ -425,8 +400,13 @@ class TensorNetwork:
                     first_node_order = node_order
             else:
                 first_node_order = self.train_nodes
-            first_node_order = first_node_order if direction == 'l2r' else reversed(first_node_order)
-            for node_l2r in first_node_order:
+            first_node_order = list(first_node_order if direction == 'l2r' else reversed(first_node_order))
+            for node_i, node_l2r in enumerate(first_node_order):
+                if eps_per_node:
+                    if isinstance(eps, list):
+                        eps_ = eps[node_i if direction == 'l2r' else len(first_node_order)-1-node_i]
+                    else:
+                        eps_ = eps
                 if node_l2r in self.node_indices and node_r2l in self.node_indices and self.node_indices[node_l2r] == self.node_indices[node_r2l]:
                     continue
                 # Timeout check
@@ -466,13 +446,13 @@ class TensorNetwork:
 
                     total_loss += loss.mean().item()
                 if verbose > 1:
-                    print(f"NS: {NS}, Left loss ({node_l2r.name if hasattr(node_l2r, 'name') else 'node'}):", total_loss / batches, f" (eps: {eps_})", f" (eps_r: {eps_r_})")
+                    print(f"NS: {NS}, Left loss ({node_l2r.name if hasattr(node_l2r, 'name') else 'node'}):", total_loss / batches, f" (eps: {eps_})")
                 try:
                     # Choose exact if eps is 0
                     _method = method
                     if eps_ == 0 and method == 'ridge_exact':
                         _method = 'exact'
-                    step_tensor = self.solve_system(node_l2r, A_out, b_out, method=_method, eps=eps_, eps_r=eps_r_, D_reg=D_reg_fn(node_l2r))
+                    step_tensor = self.solve_system(node_l2r, A_out, b_out, method=_method, eps=eps_)
                 except torch.linalg.LinAlgError:
                     if verbose > 0:
                         print(f"Singular system for node {node_l2r.name if hasattr(node_l2r, 'name') else 'node'}")
@@ -500,7 +480,7 @@ class TensorNetwork:
                     block_callback(NS, node_l2r)
             NS += 1
             if not disable_tqdm:
-                tbar.set_postfix_str(f"NS: {NS}, eps: {eps_}, eps_r: {eps_r_}")
+                tbar.set_postfix_str(f"NS: {NS}, eps: {eps_}")
             if skip_second:
                 continue
 
@@ -517,8 +497,13 @@ class TensorNetwork:
                     second_node_order = reversed(node_order)
             else:
                 second_node_order = self.train_nodes
-            second_node_order = second_node_order if direction == 'r2l' else reversed(list(second_node_order))
-            for node_r2l in second_node_order:
+            second_node_order = list(second_node_order if direction == 'r2l' else reversed(list(second_node_order)))
+            for node_i, node_r2l in enumerate(second_node_order):
+                if eps_per_node:
+                    if isinstance(eps, list):
+                        eps_ = eps[node_i if direction == 'r2l' else len(second_node_order)-1-node_i]
+                    else:
+                        eps_ = eps
                 if node_l2r in self.node_indices and node_r2l in self.node_indices and self.node_indices[node_l2r] == self.node_indices[node_r2l]:
                     continue
                 # Timeout check
@@ -557,13 +542,13 @@ class TensorNetwork:
                     total_loss += loss.mean().item()
 
                 if verbose > 1:
-                    print(f"NS: {NS}, Right loss ({node_r2l.name if hasattr(node_r2l, 'name') else 'node'}):", total_loss / batches, f" (eps: {eps_})", f" (eps_r: {eps_r_})")
+                    print(f"NS: {NS}, Right loss ({node_r2l.name if hasattr(node_r2l, 'name') else 'node'}):", total_loss / batches, f" (eps: {eps_})")
                 try:
                     # Choose exact if eps is 0
                     _method = method
                     if eps_ == 0 and method == 'ridge_exact':
                         _method = 'exact'
-                    step_tensor = self.solve_system(node_r2l, A_out, b_out, method=_method, eps=eps_, eps_r=eps_r_, D_reg=D_reg_fn(node_r2l))
+                    step_tensor = self.solve_system(node_r2l, A_out, b_out, method=_method, eps=eps_)
                 except torch.linalg.LinAlgError:
                     if verbose > 0:
                         print(f"Singular system for node {node_r2l.name if hasattr(node_r2l, 'name') else 'node'}")
@@ -591,7 +576,7 @@ class TensorNetwork:
                     block_callback(NS, node_r2l)
             NS += 1
             if not disable_tqdm:
-                tbar.set_postfix_str(f"NS: {NS}, eps: {eps_}, eps_r: {eps_r_}")
+                tbar.set_postfix_str(f"NS: {NS}, eps: {eps_}")
 
         return True
 
@@ -943,7 +928,7 @@ class CPDNetwork(TensorNetwork):
         labeler = EinsumLabeler()
         nodes = [c if x not in self.get_column_nodes(node) else x for x, c in self.node_contract.items()]
         jac = torch.einsum(','.join([''.join([labeler[l] for l in n.dim_labels]) for n in nodes])+f'->{labeler[self.sample_dim]}'+''.join([labeler[l] for l in node.dim_labels if l in labeler.mapping]), *[n.tensor for n in nodes])
-        return TensorNode(jac, dim_labels=[self.sample_dim]+[l for l in node.dim_labels if l in labeler.mapping], name='CPDJacobian')
+        return TensorNode(jac, dim_labels=[self.sample_dim]+[l for l in node.dim_labels if l in labeler.mapping], name='J')
 
     def forward(self, x):
         """Computes the forward pass of the network."""
@@ -952,8 +937,10 @@ class CPDNetwork(TensorNetwork):
         if self.node_contract is None:
             self.recompute_all_stacks()
         labeler = EinsumLabeler()
+        print(','.join([''.join([labeler[l] for l in n.dim_labels]) for n in self.node_contract.values()])+f'->{labeler[self.sample_dim]}'+''.join([labeler[l] for l in self.output_labels if l != self.sample_dim]))
+        print(self.node_contract)
         out = torch.einsum(','.join([''.join([labeler[l] for l in n.dim_labels]) for n in self.node_contract.values()])+f'->{labeler[self.sample_dim]}'+''.join([labeler[l] for l in self.output_labels if l != self.sample_dim]), *[self.node_contract[n].tensor for n in self.input_nodes])
-        return TensorNode(out, dim_labels=[self.sample_dim] + [l for l in self.output_labels if l != self.sample_dim], name='CPDOutput')
+        return TensorNode(out, dim_labels=[self.sample_dim] + [l for l in self.output_labels if l != self.sample_dim], name='O')
     
     def reset_stacks(self, node=None):
         if node is not None:

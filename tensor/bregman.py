@@ -6,11 +6,9 @@ class BregFunction(torch.nn.Module):
     def transform_forward(self, x, y):
         return x, y
 
-    def forward(self, x, y, only_loss=False):
+    def forward(self, x, y):
         x, y = self.transform_forward(x, y)
         loss = self.psi(x) - self.psi(y) - self.prod(self.d(y), x-y)
-        if only_loss:
-            return loss
         d_loss = self.grad(x, y)
         sqd_loss = self.hess(x, y)
         return loss, d_loss, sqd_loss
@@ -274,26 +272,26 @@ class AutogradLoss(nn.Module):
             loss_func = nn.MSELoss(reduction='none')
         self.loss_func = loss_func
             
-    def forward(self, y_pred, y_true, only_loss=False):
-        y_pred = y_pred.requires_grad_(True)
+    def forward(self, model_out, y_true, only_loss=False):
+        model_out = model_out.requires_grad_(True)
         
-        loss = self.loss_func(y_pred, y_true)
+        loss = self.loss_func(model_out, y_true)
         if only_loss:
             return loss
 
-        # Gradient of loss w.r.t x
+        # Gradient of loss w.r.t model_out
         d_loss = torch.autograd.grad(
-            outputs=loss.sum(), inputs=y_pred, create_graph=True, retain_graph=True
+            outputs=loss.sum(), inputs=model_out, create_graph=True, retain_graph=True
         )[0]
 
-        # Hessian of loss w.r.t x
+        # Hessian of loss w.r.t model_out
         B = []
         for i in range(d_loss.shape[-1]):
-            grad2 = torch.autograd.grad(d_loss[..., i].sum(), y_pred, retain_graph=True, create_graph=True)[0]
+            grad2 = torch.autograd.grad(d_loss[..., i].sum(), model_out, retain_graph=True, create_graph=True)[0]
             B.append(grad2.unsqueeze(-2))
-        dd_loss = torch.cat(B, dim=-2)
+        sqd_loss = torch.cat(B, dim=-2)
 
-        return loss.detach(), d_loss.detach(), dd_loss.detach()
+        return loss.detach(), d_loss.detach(), sqd_loss.detach()
     
 from torch.distributions import Normal
 
