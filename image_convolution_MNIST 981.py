@@ -1,6 +1,6 @@
 #%%
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import numpy as np
 import torch
 import torchvision
@@ -68,13 +68,13 @@ from sklearn.metrics import accuracy_score
 import numpy as np
 from matplotlib import pyplot as plt
 
-num_swipes = 3
-epss = np.geomspace(1.0, 1e-4, 2*num_swipes).tolist()
+num_swipes = 5
+epss = [1.0]*2 + [5e-1]*2 + [5e-2]*2 + [5e-3]*4 #np.geomspace(1.0, 1e-2, 2*num_swipes).tolist()
 plt.plot(epss)
 
-N = 3
-r = 12
-CB = 6
+N = 4
+r = 10
+CB = 4
 trajectory = []
 epoch = 0
 def convergence_criterion():

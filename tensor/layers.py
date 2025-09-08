@@ -162,12 +162,14 @@ class TensorNetworkLayer(nn.Module):
         self.tensor_network.to('cpu')
         return super(TensorNetworkLayer, self).cpu(*args, **kwargs)
 
-    def forward(self, x):
+    def forward(self, x, to_tensor=True):
         """Forward pass of the layer."""
         tn_out = self.tensor_network.forward(x)
         if self.labels is not None:
             tn_out.permute_first(*self.labels)
-        return tn_out.tensor
+        if to_tensor:
+            return tn_out.tensor
+        return tn_out
 
     def num_parameters(self):
         """Returns the number of parameters in the layer."""
@@ -770,6 +772,9 @@ class TensorConvolutionTrainLayer(TensorNetworkLayer):
         self.labels = self.output_labels
         tensor_network = TensorNetwork(x_nodes, train_blocks, self.nodes, output_labels=self.labels)
         super(TensorConvolutionTrainLayer, self).__init__(tensor_network)
+        self.input_nodes = x_nodes
+        self.main_nodes = train_blocks
+        self.train_nodes = train_blocks + conv_blocks
 
     def grow_cart(self, new_bond=None, new_convolution_bond=None):
         x_node_new = TensorNode(

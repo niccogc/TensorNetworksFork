@@ -1,6 +1,6 @@
 #%%
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import numpy as np
 import torch
 import torchvision
@@ -61,20 +61,19 @@ xinp_test[..., -1, -1] = 1.0
 y_test = F.one_hot(y_test, num_classes=10).to(dtype=torch.float64).cuda()
 
 # %%
-from tensor.layers import TensorConvolutionTrainLayer, TensorNetworkLayer
-from tensor.network import SumOfNetworks
+from tensor.layers import TensorConvolutionTrainLayer
 from tensor.bregman import XEAutogradBregman
 from sklearn.metrics import accuracy_score
 import numpy as np
 from matplotlib import pyplot as plt
 
-num_swipes = 3
-epss = np.geomspace(1.0, 1e-4, 2*num_swipes).tolist()
+num_swipes = 30
+epss = np.geomspace(1.0, 1e-2, 2*num_swipes).tolist()
 plt.plot(epss)
 
-N = 3
-r = 12
-CB = 6
+N = 5
+r = 8
+CB = 4
 trajectory = []
 epoch = 0
 def convergence_criterion():
@@ -91,30 +90,14 @@ def convergence_criterion():
     return False
 
 # Define Bregman function
-nets = []
-for i in range(1, N+1):
-    if i == 1:
-        num_patches = xinp_train.shape[1]
-        patch_pixels = xinp_train.shape[2]
-    else:
-        num_patches = xinp_train.shape[1] - 1
-        patch_pixels = xinp_train.shape[2] - 1
-    net = TensorConvolutionTrainLayer(num_carriages=i, bond_dim=r, num_patches=num_patches, patch_pixels=patch_pixels, output_shape=y_train.shape[1]-1, convolution_bond=CB).tensor_network
-    nets.append(net)
-layer = TensorNetworkLayer(
-    SumOfNetworks(
-        nets,
-        only_bias_first=True,
-        train_linear=True
-    )
-).cuda()
+layer = TensorConvolutionTrainLayer(num_carriages=N, bond_dim=r, num_patches=xinp_train.shape[1], patch_pixels=xinp_train.shape[2], output_shape=y_train.shape[1]-1, convolution_bond=CB).cuda()
 print('Num params:', layer.num_parameters())
 #%%
 from tensor.utils import visualize_tensornetwork
 visualize_tensornetwork(layer.tensor_network)
 #%%
 with torch.inference_mode():
-    y_pred = layer.forward(xinp_train[:64], to_tensor=True)
+    y_pred = layer(xinp_train[:64])
     w = 1/y_pred.std().item()
     #del y_pred
 bf = XEAutogradBregman(w=w)

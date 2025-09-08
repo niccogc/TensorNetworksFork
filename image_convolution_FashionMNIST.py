@@ -1,6 +1,6 @@
 #%%
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import numpy as np
 import torch
 import torchvision
@@ -13,7 +13,7 @@ transform = transforms.Compose([
     transforms.Normalize((0.1307,), (0.3081,))
 ])
 
-train_dataset = torchvision.datasets.MNIST(root="/work3/aveno/MNIST/data", train=True, transform=transform, download=True)
+train_dataset = torchvision.datasets.FashionMNIST(root="/work3/aveno/FashionMNIST/data", train=True, transform=transform, download=True)
 train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=64, shuffle=True)
 
 train_samples = []
@@ -45,7 +45,7 @@ train_idx, val_idx = idx[:split], idx[split:]
 xinp_train, xinp_val = xinp_train[train_idx], xinp_train[val_idx]
 y_train, y_val = y_train[train_idx], y_train[val_idx]
 
-test_dataset = torchvision.datasets.MNIST(root="/work3/aveno/MNIST/data", train=False, transform=transform, download=True)
+test_dataset = torchvision.datasets.FashionMNIST(root="/work3/aveno/FashionMNIST/data", train=False, transform=transform, download=True)
 test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=64, shuffle=True)
 test_samples = []
 test_labels = []
@@ -68,13 +68,13 @@ from sklearn.metrics import accuracy_score
 import numpy as np
 from matplotlib import pyplot as plt
 
-num_swipes = 3
-epss = np.geomspace(1.0, 1e-4, 2*num_swipes).tolist()
+num_swipes = 4
+epss = [1.0]*2 + [5e-1]*2 + [5e-2]*2 + [5e-5]*4 #np.geomspace(1.0, 1e-2, 2*num_swipes).tolist()
 plt.plot(epss)
 
-N = 3
-r = 12
-CB = 6
+N = 5
+r = 6
+CB = 4
 trajectory = []
 epoch = 0
 def convergence_criterion():

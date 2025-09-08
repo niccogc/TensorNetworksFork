@@ -12,7 +12,7 @@ def root_mean_squared_error_torch(y_true, y_pred):
     return root_mean_squared_error(y_true, y_pred)
 
 from tensor.bregman import SquareBregFunction, AutogradLoss, XEAutogradBregman
-from tensor.module import TensorTrainRegressor, EarlyStopping
+from tensor.module import TensorTrainRegressor, EarlyStopping, TensorTrainBatchRegressor
 from tensor.layers import CPDLayer, TensorTrainLayer
 from scipy import special
 from sklearn.preprocessing import PolynomialFeatures
@@ -51,7 +51,7 @@ X_test = X_quant.transform(X_test)
 y_train = np.eye(10)[y_train.numpy()]
 y_test = np.eye(10)[y_test.numpy()]
 #%%
-tt = TensorTrainRegressor(
+tt = TensorTrainBatchRegressor(
     num_swipes=20,
     eps_start=1.0,
     eps_end=1e-12,
@@ -59,15 +59,16 @@ tt = TensorTrainRegressor(
     r=8,
     linear_dim=4,
     output_dim=10,
-    batch_size=512,
+    batch_size=32,
     constrict_bond=False,
     perturb=False,
     seed=42,
     device='cuda',
     bf=AutogradLoss(torch.nn.MSELoss(reduction='none')),
-    lr=1.0,
+    lr=1/(60000/32),
     method="ridge_cholesky",
     model_type="tt_type1_bias_first", #tt_type1_bias_first_no_train_linear
+    swipe_method='batch_same',
     verbose=1 # 1
 )
 tt.fit(X_train, y_train)

@@ -135,7 +135,7 @@ class TensorNetwork:
         if to_tensor:
             contracted = contracted.tensor
         return contracted
-
+    
     def forward_batch(self, x, batch_size):
         """Computes the forward pass of the network in batches."""
         data_size = len(x) if isinstance(x, torch.Tensor) else x[0].shape[0]
@@ -172,7 +172,7 @@ class TensorNetwork:
         self.right_stacks[node] = contracted
 
     @torch.no_grad()
-    def get_A_b(self, node, grad, hessian):
+    def get_A_b(self, node, loss, grad, hessian):
         """Finds the update step for a given node"""
 
         # Determine broadcast
@@ -287,7 +287,7 @@ class TensorNetwork:
 
         return b
 
-    def solve_system(self, node, A, b, method='exact', eps=0.0):
+    def solve_system(self, node, A, b, loss=None, method='exact', eps=0.0):
         """Finds the update step for a given node"""
         # Solve the system
         A_f = A.flatten(0, A.ndim//2-1).flatten(1, -1)
@@ -307,6 +307,13 @@ class TensorNetwork:
         elif method.lower().startswith('ridge_cholesky'):
             A_f = A_f + (2 * eps) * torch.eye(A_f.shape[-1], dtype=A_f.dtype, device=A_f.device)
             b_f = b_f + (2 * eps) * node.tensor.flatten()
+
+            L = torch.linalg.cholesky(A_f)
+            x = torch.cholesky_solve(-b_f.unsqueeze(-1), L)
+            x = x.squeeze(-1)
+        elif method.lower().startswith('ridge_trace'):
+            constant_eps = (2 * eps) * torch.norm(b_f).square()
+            A_f = A_f + constant_eps * torch.eye(A_f.shape[-1], dtype=A_f.dtype, device=A_f.device)
 
             L = torch.linalg.cholesky(A_f)
             x = torch.cholesky_solve(-b_f.unsqueeze(-1), L)
@@ -449,8 +456,7 @@ class TensorNetwork:
                     y_pred = self.forward(x_batch, to_tensor=True)
                     loss, d_loss, sqd_loss = loss_fn.forward(y_pred, y_batch)
 
-                    A, b_vec = self.get_A_b(node_l2r, d_loss, sqd_loss)
-
+                    A, b_vec = self.get_A_b(node_l2r, loss, d_loss, sqd_loss)
                     if A_out is None:
                         A_out = A
                         b_out = b_vec
@@ -458,7 +464,7 @@ class TensorNetwork:
                         A_out.add_(A)
                         b_out.add_(b_vec)
 
-                    total_loss += loss.mean().item()
+                    total_loss += loss.sum().item()
                 if verbose > 1:
                     print(f"NS: {NS}, Left loss ({node_l2r.name if hasattr(node_l2r, 'name') else 'node'}):", total_loss / batches, f" (eps: {eps_})")
                 try:
@@ -466,7 +472,7 @@ class TensorNetwork:
                     _method = method
                     if eps_ == 0 and method == 'ridge_exact':
                         _method = 'exact'
-                    step_tensor = self.solve_system(node_l2r, A_out, b_out, method=_method, eps=eps_)
+                    step_tensor = self.solve_system(node_l2r, A_out / batches, b_out / batches, loss=total_loss, method=_method, eps=eps_)
                 except torch.linalg.LinAlgError:
                     if verbose > 0:
                         print(f"Singular system for node {node_l2r.name if hasattr(node_l2r, 'name') else 'node'}")
@@ -545,7 +551,7 @@ class TensorNetwork:
                     y_pred = self.forward(x_batch, to_tensor=True)
                     loss, d_loss, sqd_loss = loss_fn.forward(y_pred, y_batch)
 
-                    A, b_vec = self.get_A_b(node_r2l, d_loss, sqd_loss)
+                    A, b_vec = self.get_A_b(node_r2l, loss, d_loss, sqd_loss)
                     if A_out is None:
                         A_out = A
                         b_out = b_vec
@@ -553,7 +559,7 @@ class TensorNetwork:
                         A_out.add_(A)
                         b_out.add_(b_vec)
 
-                    total_loss += loss.mean().item()
+                    total_loss += loss.sum().item()
 
                 if verbose > 1:
                     print(f"NS: {NS}, Right loss ({node_r2l.name if hasattr(node_r2l, 'name') else 'node'}):", total_loss / batches, f" (eps: {eps_})")
@@ -562,7 +568,7 @@ class TensorNetwork:
                     _method = method
                     if eps_ == 0 and method == 'ridge_exact':
                         _method = 'exact'
-                    step_tensor = self.solve_system(node_r2l, A_out, b_out, method=_method, eps=eps_)
+                    step_tensor = self.solve_system(node_r2l, A_out / batches, b_out / batches, loss=total_loss, method=_method, eps=eps_)
                 except torch.linalg.LinAlgError:
                     if verbose > 0:
                         print(f"Singular system for node {node_r2l.name if hasattr(node_r2l, 'name') else 'node'}")
@@ -593,7 +599,6 @@ class TensorNetwork:
                 tbar.set_postfix_str(f"NS: {NS}, eps: {eps_}")
 
         return True
-
 
     def orthonormalize_left(self):
         """
@@ -953,66 +958,8 @@ class CPDNetwork(TensorNetwork):
             self.recompute_all_stacks()
         labeler = EinsumLabeler()
         out = torch.einsum(','.join([''.join([labeler[l] for l in n.dim_labels]) for n in self.node_contract.values()])+f'->{labeler[self.sample_dim]}'+''.join([labeler[l] for l in self.output_labels if l != self.sample_dim]), *[self.node_contract[n].tensor for n in self.input_nodes])
-        node = TensorNode(out, dim_labels=[self.sample_dim] + [l for l in self.output_labels if l != self.sample_dim], name='O')
-        if self.output_labels is not None:
-            node = node.permute_first(*self.output_labels)
-        if to_tensor:
-            return node.tensor
-        return node
-
-    def reset_stacks(self, node=None):
-        if node is not None:
-            # Update the column corresponding to this node (first get the input node)
-            input_node = next((n for n in self.input_nodes if n in self.get_column_nodes(node)), None)
-            if input_node is not None:
-                stack = input_node
-                for vnode in self.get_column_nodes(input_node):
-                    stack = stack.contract_with(vnode)
-                self.node_contract[input_node] = stack
-        else:
-            self.node_contract = None
-
-class SymmetricCPDNetwork(TensorNetwork):
-    def __init__(self, degree=3, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.node_contract = None
-        self.degree = degree
-
-    def set_input(self, x):
-        """Sets the input tensor for the network."""
-        was_updated = super().set_input(x)
-        if was_updated:
-            self.node_contract = None
-        return was_updated
-
-    def recompute_all_stacks(self):
-        self.node_contract = {}
-        for n in self.input_nodes:
-            stack = n
-            for vnode in self.get_column_nodes(n):
-                stack = stack.contract_with(vnode)
-            self.node_contract[n] = stack
-
-    def compute_jacobian_stack(self, node) -> TensorNode:
-        labeler = EinsumLabeler()
-        nodes = [c if x not in self.get_column_nodes(node) else x for x, c in self.node_contract.items()]
-        jac = torch.einsum(','.join([''.join([labeler[l] for l in n.dim_labels]) for n in nodes])+f'->{labeler[self.sample_dim]}'+''.join([labeler[l] for l in node.dim_labels if l in labeler.mapping]), *[n.tensor for n in nodes])
-        return TensorNode(jac, dim_labels=[self.sample_dim]+[l for l in node.dim_labels if l in labeler.mapping], name='J')
-
-    def forward(self, x, to_tensor=False):
-        """Computes the forward pass of the network."""
-        self.set_input(x)
-
-        if self.node_contract is None:
-            self.recompute_all_stacks()
-        out = self.node_contract[self.input_nodes[0]].tensor.pow(self.degree)
-        node = TensorNode(out, dim_labels=[self.sample_dim] + [l for l in self.output_labels if l != self.sample_dim], name='O')
-        if self.output_labels is not None:
-            node = node.permute_first(*self.output_labels)
-        if to_tensor:
-            return node.tensor
-        return node
-
+        return TensorNode(out, dim_labels=[self.sample_dim] + [l for l in self.output_labels if l != self.sample_dim], name='O')
+    
     def reset_stacks(self, node=None):
         if node is not None:
             # Update the column corresponding to this node (first get the input node)
@@ -1046,11 +993,11 @@ class SumOfNetworks(TensorNetwork):
         super().__init__(input_nodes, main_nodes, train_nodes, output_labels=output_labels, sample_dim=sample_dim)
         self.networks = networks
         self.only_bias_first = only_bias_first
-
+    
     def forward(self, x, to_tensor=False):
         out = None
         for i, net in enumerate(self.networks):
-            y = net.forward([x[..., *[slice(0, b.shape[i]) for i in range(1, b.tensor.ndim)]] for b in net.input_nodes], to_tensor=False)
+            y = net.forward([x[..., :b.shape[1]] for b in net.input_nodes], to_tensor=False)
             if self.output_labels is not None:
                 y = y.permute_first(*self.output_labels)
             if out is None:
@@ -1061,20 +1008,20 @@ class SumOfNetworks(TensorNetwork):
             out = out.tensor
         return out
 
-    def get_A_b(self, node, grad, hessian):
+    def get_A_b(self, node, loss, grad, hessian):
         for net in self.networks:
             if node in net.nodes:
-                return net.get_A_b(node, grad, hessian)
+                return net.get_A_b(node, loss, grad, hessian)
         raise ValueError("Node not found in any network")
-
+    
     def reset_stacks(self, node=None):
         for net in self.networks:
             net.reset_stacks(node)
-
+    
     def recompute_all_stacks(self):
         for net in self.networks:
             net.recompute_all_stacks()
-
+    
     def orthonormalize_left(self):
         for net in self.networks:
             net.orthonormalize_left()
@@ -1082,7 +1029,7 @@ class SumOfNetworks(TensorNetwork):
     def orthonormalize_right(self):
         for net in self.networks:
             net.orthonormalize_right()
-
+    
     def node_orthonormalize_left(self, node):
         for net in self.networks:
             if node in net.main_nodes:
@@ -1092,9 +1039,9 @@ class SumOfNetworks(TensorNetwork):
         for net in self.networks:
             if node in net.main_nodes:
                 net.node_orthonormalize_right(node)
-
+    
     def left_update_stacks(self, node):
         raise NotImplementedError("left_update_stacks not implemented for SumOfNetworks")
-
+    
     def right_update_stacks(self, node):
         raise NotImplementedError("right_update_stacks not implemented for SumOfNetworks")
