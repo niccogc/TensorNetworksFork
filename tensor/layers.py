@@ -7,12 +7,15 @@ from collections import defaultdict
 from tensor.data_compression import train_concat
 
 class MainNodeLayer(nn.Module):
-    def __init__(self, N, r, f, output_shape=tuple(), down_label='p', constrict_bond=True, perturb=False, dtype=None):
+    def __init__(self, N, r, f, output_shape=tuple(), down_label='p', horizontal_label='r{0}', constrict_bond=True, perturb=False, dtype=None):
         """Creates the main nodes for the layer."""
         super(MainNodeLayer, self).__init__()
         output_shape = output_shape if isinstance(output_shape, tuple) else (output_shape,)
         labels = ['s']
         nodes = []
+
+        if N == 1:
+            r = 1
 
         def build_left(b0, f, R, right=0):
             mx = min(R, b0*f) if constrict_bond else R
@@ -36,7 +39,8 @@ class MainNodeLayer(nn.Module):
             return blockf
 
         if perturb:
-            b0 = 0.02 * torch.randn((1, output_shape[0], f, min(r, f) if constrict_bond else r), dtype=dtype)
+            b0 = build_perturb(1, f, min(r, f) if constrict_bond else r)
+            b0 = b0 * (1+0.02*torch.randn_like(b0))
             bn = build_perturb(r, f, 1)
             bn = bn * (1+0.02*torch.randn_like(bn))
             left_stack = [b0]
@@ -67,6 +71,8 @@ class MainNodeLayer(nn.Module):
                     left_stack.append(build_left(left_r, f, r))
                 else:
                     right_stack.insert(0, build_right(r, f, right_r))
+        if N == 1:
+            middle = [b0]
 
         for i in range(1, N+1):
             if i-1 < len(output_shape):
@@ -77,17 +83,16 @@ class MainNodeLayer(nn.Module):
                 up = 1
                 up_label = 'c'
             down = f
-            left_label = f'r{i}'
-            right_label = f'r{i+1}'
-            
+            left_label = horizontal_label.format(i)
+            right_label = horizontal_label.format(i+1)
+
             node_input = middle[i-1]
             if not perturb:
                 left, right = node_input
                 node_input = (left, up, down, right)
-
             node = TensorNode(node_input, [left_label, up_label, down_label.format(i), right_label], l=left_label, r=right_label, name=f"A{i}", dtype=dtype)
             nodes.append(node)
-        
+
         self.nodes = nodes
         self.labels = labels
 
@@ -139,7 +144,7 @@ class TensorNetworkLayer(nn.Module):
                     node.tensor.data.copy_(tensor_params[f"tensor_param_{i}"].detach().clone())
             else:
                 raise ValueError(f"Missing parameter: tensor_param_{i}")
-        
+
         self.tensor_network.reset_stacks()
 
     def cuda(self, *args, **kwargs):
@@ -157,24 +162,26 @@ class TensorNetworkLayer(nn.Module):
         self.tensor_network.to('cpu')
         return super(TensorNetworkLayer, self).cpu(*args, **kwargs)
 
-    def forward(self, x):
+    def forward(self, x, to_tensor=True):
         """Forward pass of the layer."""
         tn_out = self.tensor_network.forward(x)
         if self.labels is not None:
             tn_out.permute_first(*self.labels)
-        return tn_out.tensor
+        if to_tensor:
+            return tn_out.tensor
+        return tn_out
 
     def num_parameters(self):
         """Returns the number of parameters in the layer."""
         return sum(p.tensor.numel() for p in self.tensor_network.train_nodes)
-    
-    def zip_connect(self, nodes1, nodes2, label='p'):
+
+    def zip_connect(self, nodes1, nodes2, label='p', priority=-1):
         """Connects two lists of nodes with a zip connection."""
         if len(nodes1) != len(nodes2):
             raise ValueError("The number of nodes in both lists must be the same.")
         for i, (n1, n2) in enumerate(zip(nodes1, nodes2), 1):
-            n1.connect(n2, label.format(i))
-    
+            n1.connect(n2, label.format(i), priority=priority)
+
     def horizontal_connect(self, nodes):
         """Connects nodes horizontally."""
         if len(nodes) < 2:
@@ -182,7 +189,7 @@ class TensorNetworkLayer(nn.Module):
         for n1, n2 in zip(nodes[:-1], nodes[1:]):
             if n1.right_labels and n2.left_labels and n1.right_labels[0] != n2.left_labels[0]:
                 raise ValueError(f"Right label of the first node does not match left label of the second node. Nodes: {n1.name}, {n2.name}")
-            n1.connect(n2, n1.right_labels[0], priority=1)            
+            n1.connect(n2, n1.right_labels[0], priority=1)
 
 class TensorTrainLayer(TensorNetworkLayer):
     def __init__(self, num_carriages, bond_dim, input_features, output_shape=tuple(), squeeze=True, constrict_bond=True, perturb=False, dtype=None, seed=None):
@@ -204,11 +211,11 @@ class TensorTrainLayer(TensorNetworkLayer):
         self.horizontal_connect(self.main_node_layer.nodes)
         self.input_node_layer = InputNodeLayer(num_carriages, input_features, label='p{0}', dtype=dtype)
         self.zip_connect(self.input_node_layer.nodes, self.main_node_layer.nodes, label='p{0}')
-        
+
         if squeeze:
             for node in self.main_node_layer.nodes:
                 node.squeeze(self.main_node_layer.labels)
-        
+
         # Create a TensorNetwork
         tensor_network = TensorNetwork(self.input_node_layer.nodes, self.main_node_layer.nodes, output_labels=self.main_node_layer.labels)
         self.set_tensor_network(tensor_network)
@@ -250,7 +257,7 @@ class TensorTrainNN(TensorTrainLayer):
         self._lmb = 0.9
         self._A_cur = None
         self._b_cur = None
-    
+
     def accumulate_gradient(self, node, d_loss, sqd_loss, lmb=0.9):
         A, b_vec = self.tensor_network.get_A_b(node, d_loss, sqd_loss)
         if self._A_cur is None or self._b_cur is None:
@@ -259,7 +266,7 @@ class TensorTrainNN(TensorTrainLayer):
         else:
             self._A_cur = lmb * self._A_cur + (1 - lmb) * A
             self._b_cur = lmb * self._b_cur + (1 - lmb) * b_vec
-    
+
     def forward(self, x):
         self.load_node_states(self.node_state_dict, set_value=True)
 
@@ -320,13 +327,13 @@ class TensorTrainLinearLayer(TensorNetworkLayer):
         self.linear_layer = NodeLayer(
             num_carriages, (linear_dim, input_features), labels=('lin{0}', 'p{0}'), dtype=dtype
         )
-        self.zip_connect(self.main_node_layer.nodes, self.linear_layer.nodes, label='lin{0}')
+        self.zip_connect(self.main_node_layer.nodes, self.linear_layer.nodes, label='lin{0}', priority=2)
         self.input_node_layer = InputNodeLayer(num_carriages, input_features, label='p{0}', dtype=dtype)
-        self.zip_connect(self.linear_layer.nodes, self.input_node_layer.nodes, label='p{0}')
+        self.zip_connect(self.linear_layer.nodes, self.input_node_layer.nodes, label='p{0}', priority=1)
         if squeeze:
             for node in self.main_node_layer.nodes:
                 node.squeeze(self.main_node_layer.labels)
-        # Create a TensorNetwork (interleaving nodes, such that)
+
         tensor_network = TensorNetwork(
             self.input_node_layer.nodes,
             main_nodes=self.main_node_layer.nodes,
@@ -347,14 +354,14 @@ def concatenate_trains(tensor_layers):
             if j >= len(layer.labels) - 1:
                 tensor_block = tensor_block.unsqueeze(1)
             nodes_to_concat[i].append(tensor_block)
-    
-    
+
+
     train = nodes_to_concat[0]
     for i in range(1, len(tensor_layers)):
         train = train_concat(train, nodes_to_concat[i])
 
     train[0] = train[0] / len(tensor_layers)
-    
+
     return TensorTrainLayer(num_carriages=len(train), bond_dim=tensor_layers[0].bond_dim, input_features=tensor_layers[0].input_features, output_shape=tensor_layers[0].output_shape, nodes=train, squeeze=True)
 
 class TensorTrainDMRGInfiLayer(TensorNetworkLayer):
@@ -696,7 +703,7 @@ class TensorConvolutionTrainLayer(TensorNetworkLayer):
 
                 blockf = torch.cat((torch.zeros(rl, f-1, rr), block), dim=1)
                 return blockf
-            
+
             b0 = torch.randn((1, num_patches, bond_dim), dtype=dtype) #build_perturb(1, num_patches, bond_dim)
             bn = build_perturb(bond_dim, num_patches, 1)
             left_stack = [b0]
@@ -765,6 +772,9 @@ class TensorConvolutionTrainLayer(TensorNetworkLayer):
         self.labels = self.output_labels
         tensor_network = TensorNetwork(x_nodes, train_blocks, self.nodes, output_labels=self.labels)
         super(TensorConvolutionTrainLayer, self).__init__(tensor_network)
+        self.input_nodes = x_nodes
+        self.main_nodes = train_blocks
+        self.train_nodes = train_blocks + conv_blocks
 
     def grow_cart(self, new_bond=None, new_convolution_bond=None):
         x_node_new = TensorNode(
@@ -1306,7 +1316,7 @@ class CompressedTensorTrainLayer(TensorNetworkLayer):
         if seed is not None:
             torch.manual_seed(seed)
             torch.cuda.manual_seed(seed)
-        
+
         # Create input nodes
         self.x_nodes = []
         self.physical_dims = []
@@ -1317,7 +1327,7 @@ class CompressedTensorTrainLayer(TensorNetworkLayer):
                 x_node.connect(self.x_nodes[-1], f'k{i}', priority=1)
             self.x_nodes.append(x_node)
             self.physical_dims.append(data_blocks[i-1].shape[1])
-        
+
         # Create main nodes
         self.nodes = []
         self.labels = ['s']
@@ -1350,7 +1360,7 @@ class CompressedTensorTrainLayer(TensorNetworkLayer):
             right_stack = [bn]
             middle = [b0, bn]
             for i in range(N-2):
-                
+
                 b0 = left_stack[-1].shape[-1]
                 b1 = right_stack[0].shape[0]
                 if i == N-3:
