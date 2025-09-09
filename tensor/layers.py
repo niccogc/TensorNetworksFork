@@ -364,6 +364,119 @@ def concatenate_trains(tensor_layers):
 
     return TensorTrainLayer(num_carriages=len(train), bond_dim=tensor_layers[0].bond_dim, input_features=tensor_layers[0].input_features, output_shape=tensor_layers[0].output_shape, nodes=train, squeeze=True)
 
+
+class OperatorNodeLayer(nn.Module):
+    def __init__(self, N, operator, bond_label='b{0}', up_label='u{0}', down_label='d{0}', ring=False, left=None, right=None, dtype=None):
+        """
+        Creates the operator nodes for a layer, forming an MPO structure.
+        """
+        super(OperatorNodeLayer, self).__init__()
+        nodes = []
+
+        for i in range(N):
+            # Select the appropriate operator tensor for the current node
+            op_tensor = None
+            if isinstance(operator, (list, tuple)):
+                op_tensor = operator[i]
+            elif ring:
+                op_tensor = operator
+            elif i == 0 and left is not None:
+                op_tensor = left
+            elif i == N - 1 and right is not None:
+                op_tensor = right
+            else:
+                op_tensor = operator
+
+            # Define the labels for the tensor bonds
+            left_bond = bond_label if ring and i == 0 else bond_label.format(i)
+            right_bond = bond_label if ring and i == N - 1 else bond_label.format(i+1)
+
+            # Create the TensorNode for the operator
+            op_node = TensorNode(
+                op_tensor,
+                dim_labels=[left_bond, up_label.format(i+1), down_label.format(i+1), right_bond],
+                l=left_bond,
+                r=right_bond,
+                name=f"O{i+1}",
+                dtype=dtype
+            )
+            nodes.append(op_node)
+
+        self.nodes = nodes
+        self.labels = []
+
+def get_cum_sum_operator(n, num_carriages, input_features, dtype=None):
+    # Left bond dimension is 1 for the first operator, p otherwise
+    left_dim = 1 if n == 0 else input_features
+    # Right bond dimension is 1 for the last operator, p otherwise
+    right_dim = 1 if n == num_carriages - 1 else input_features
+
+    # H is the upper-triangular matrix of ones for summation
+    H = torch.triu(torch.ones((left_dim, input_features), dtype=dtype), diagonal=0)
+
+    # D is the diagonal tensor for propagating the result
+    D = torch.zeros((input_features, input_features, input_features, right_dim), dtype=dtype)
+    for i in range(input_features):
+        D[i, i, i, 0 if n == num_carriages - 1 else i] = 1
+
+    # C is the final operator tensor for this node
+    return torch.einsum('ij,jklm->iklm', H, D)
+
+class CumSumLayer(TensorNetworkLayer):
+    def __init__(self, num_carriages, bond_dim, input_features, output_shape=tuple(), squeeze=True, constrict_bond=True, perturb=False, dtype=None, seed=None):
+        super(CumSumLayer, self).__init__()
+        self.num_carriages = num_carriages
+        self.input_features = input_features
+
+        self.main_node_layer = MainNodeLayer(num_carriages, bond_dim, input_features, output_shape=output_shape, down_label='p{0}', constrict_bond=constrict_bond, perturb=perturb, dtype=dtype)
+        self.horizontal_connect(self.main_node_layer.nodes)
+
+        if num_carriages > 1:
+            C_left = get_cum_sum_operator(0, num_carriages, input_features, dtype=dtype)
+            C_mid = get_cum_sum_operator(1, num_carriages, input_features, dtype=dtype)
+            C_right = get_cum_sum_operator(num_carriages - 1, num_carriages, input_features, dtype=dtype)
+
+            self.operator_layer = OperatorNodeLayer(
+                num_carriages,
+                operator=C_mid,
+                left=C_left,
+                right=C_right,
+                up_label='p{0}',
+                down_label='d{0}',
+                dtype=dtype
+            )
+
+            self.input_node_layer = InputNodeLayer(num_carriages, input_features, label='d{0}', dtype=dtype)
+            # 3. Connect the nodes to form the MPO and attach inputs
+            self.horizontal_connect(self.operator_layer.nodes)
+            self.zip_connect(self.main_node_layer.nodes, self.operator_layer.nodes, label='p{0}', priority=2)
+            self.zip_connect(self.operator_layer.nodes, self.input_node_layer.nodes, label='d{0}', priority=1)
+
+            # Squeeze operator nodes
+            for node in self.operator_layer.nodes:
+                node.squeeze()
+        elif num_carriages == 1:
+            self.input_node_layer = InputNodeLayer(num_carriages, input_features, label='p{0}', dtype=dtype)
+            self.zip_connect(self.input_node_layer.nodes, self.main_node_layer.nodes, label='p{0}', priority=1)
+
+        # Squeeze output dimension if specified
+        if squeeze:
+            for node in self.main_node_layer.nodes:
+                node.squeeze(self.main_node_layer.labels)
+
+        train_nodes = self.main_node_layer.nodes
+        output_labels = self.main_node_layer.labels
+
+        tensor_network = TensorNetwork(
+            input_nodes=self.input_node_layer.nodes,
+            main_nodes=self.main_node_layer.nodes,
+            train_nodes=train_nodes,
+            output_labels=output_labels
+        )
+        
+        self.set_tensor_network(tensor_network)
+
+
 class TensorTrainDMRGInfiLayer(TensorNetworkLayer):
     def __init__(self, bond_dim, input_features, output_shape=tuple(), ring=False, squeeze=True, constrict_bond=True):
         """Initializes a TensorTrainLayer."""
@@ -567,7 +680,7 @@ class TensorTrainDMRGInfiLayer(TensorNetworkLayer):
         return split_err
 
 
-class TensorOperatorLayer(TensorNetworkLayer):
+class TensorOperatorLayerDeprecated(TensorNetworkLayer):
     def __init__(self, operator, input_features, bond_dim, num_carriages, output_shape=1, ring=False, left=None, right=None):
         """Initializes a TensorOperatorLayer."""
         self.operator = operator
@@ -672,7 +785,7 @@ class TensorOperatorLayer(TensorNetworkLayer):
             self.nodes[-1].connect(self.nodes[0], 'rr')
 
         tensor_network = TensorNetwork(self.x_nodes, self.nodes, output_labels=self.output_labels)
-        super(TensorOperatorLayer, self).__init__(tensor_network, labels=self.output_labels)
+        super(TensorOperatorLayerDeprecated, self).__init__(tensor_network, labels=self.output_labels)
 
 
 class TensorConvolutionTrainLayer(TensorNetworkLayer):

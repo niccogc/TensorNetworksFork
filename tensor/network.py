@@ -371,7 +371,7 @@ class TensorNetwork:
 
         return new_network
 
-    def accumulating_swipe(self, x, y_true, loss_fn, node_order=None, batch_size=-1, num_swipes=1, lr=1.0, method='exact', eps=1e-12, convergence_criterion=None, orthonormalize=False, verbose=False, skip_second=False, blocks_input=False, timeout=None, data_device=None, model_device=None, disable_tqdm=None, block_callback=None, loss_callback=None, direction='l2r', update_or_reset_stack='reset', adaptive_step=False, min_norm=None, max_norm=None, eps_per_node=False):
+    def accumulating_swipe(self, x, y_true, loss_fn, node_order=None, batch_size=-1, num_swipes=1, lr=1.0, method='exact', eps=1e-12, eps_decay=None, convergence_criterion=None, orthonormalize=False, verbose=False, skip_second=False, blocks_input=False, timeout=None, data_device=None, model_device=None, disable_tqdm=None, block_callback=None, loss_callback=None, direction='l2r', update_or_reset_stack='reset', adaptive_step=False, min_norm=None, max_norm=None, eps_per_node=False):
         """Swipes the network to minimize the loss using accumulated A and b over mini-batches.
         Args:
             timeout (float or None): Maximum time in seconds to run. If None, no timeout.
@@ -407,6 +407,8 @@ class TensorNetwork:
                 eps_ = eps[NS]
             else:
                 eps_ = eps
+            if eps_decay is not None:
+                eps_ = eps_ * eps_decay**NS
             # LEFT TO RIGHT
             if node_order is not None:
                 if isinstance(node_order, tuple):
@@ -502,6 +504,8 @@ class TensorNetwork:
                 eps_ = eps[NS]
             else:
                 eps_ = eps
+            if eps_decay is not None:
+                eps_ = eps_ * eps_decay**NS
 
             # RIGHT TO LEFT
             if node_order is not None:
@@ -972,63 +976,10 @@ class CPDNetwork(TensorNetwork):
         else:
             self.node_contract = None
 
-class SymmetricCPDNetwork(TensorNetwork):
-    def __init__(self, degree=3, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.node_contract = None
-        self.degree = degree
-
-    def set_input(self, x):
-        """Sets the input tensor for the network."""
-        was_updated = super().set_input(x)
-        if was_updated:
-            self.node_contract = None
-        return was_updated
-
-    def recompute_all_stacks(self):
-        self.node_contract = {}
-        for n in self.input_nodes:
-            stack = n
-            for vnode in self.get_column_nodes(n):
-                stack = stack.contract_with(vnode)
-            self.node_contract[n] = stack
-
-    def compute_jacobian_stack(self, node) -> TensorNode:
-        labeler = EinsumLabeler()
-        nodes = [c if x not in self.get_column_nodes(node) else x for x, c in self.node_contract.items()]
-        jac = torch.einsum(','.join([''.join([labeler[l] for l in n.dim_labels]) for n in nodes])+f'->{labeler[self.sample_dim]}'+''.join([labeler[l] for l in node.dim_labels if l in labeler.mapping]), *[n.tensor for n in nodes])
-        return TensorNode(jac, dim_labels=[self.sample_dim]+[l for l in node.dim_labels if l in labeler.mapping], name='J')
-
-    def forward(self, x, to_tensor=False):
-        """Computes the forward pass of the network."""
-        self.set_input(x)
-
-        if self.node_contract is None:
-            self.recompute_all_stacks()
-        out = self.node_contract[self.input_nodes[0]].tensor.pow(self.degree)
-        node = TensorNode(out, dim_labels=[self.sample_dim] + [l for l in self.output_labels if l != self.sample_dim], name='O')
-        if self.output_labels is not None:
-            node = node.permute_first(*self.output_labels)
-        if to_tensor:
-            return node.tensor
-        return node
-
-    def reset_stacks(self, node=None):
-        if node is not None:
-            # Update the column corresponding to this node (first get the input node)
-            input_node = next((n for n in self.input_nodes if n in self.get_column_nodes(node)), None)
-            if input_node is not None:
-                stack = input_node
-                for vnode in self.get_column_nodes(input_node):
-                    stack = stack.contract_with(vnode)
-                self.node_contract[input_node] = stack
-        else:
-            self.node_contract = None
-
 class SumOfNetworks(TensorNetwork):
     # A function which takes multiple tensor networks and sums their outputs.
     # We need to define the recompute_all_stacks, forward and reset_stacks methods.
-    def __init__(self, networks, output_labels=('s',), sample_dim='s', only_bias_first=False, train_linear=True):
+    def __init__(self, networks, output_labels=('s',), sample_dim='s', train_operators=True):
         input_nodes = []
         main_nodes = []
         train_nodes = []
@@ -1039,13 +990,12 @@ class SumOfNetworks(TensorNetwork):
             for n in net.main_nodes:
                 n.name = f"{n.name}_n{i}"
             main_nodes.extend(net.main_nodes)
-            if train_linear:
+            if train_operators:
                 train_nodes.extend(net.train_nodes)
             else:
                 train_nodes.extend(net.main_nodes)
         super().__init__(input_nodes, main_nodes, train_nodes, output_labels=output_labels, sample_dim=sample_dim)
         self.networks = networks
-        self.only_bias_first = only_bias_first
 
     def forward(self, x, to_tensor=False):
         out = None
