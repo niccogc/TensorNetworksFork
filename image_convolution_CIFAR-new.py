@@ -1,6 +1,6 @@
 #%%
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 import numpy as np
 import torch
 import torchvision
@@ -8,30 +8,35 @@ import torchvision.transforms as transforms
 from torch.nn import functional as F
 torch.set_default_dtype(torch.float64)
 
-transform = transforms.Compose([
-    transforms.ToTensor(),
-    transforms.Normalize((0.1307,), (0.3081,))
-])
+# Transformations for the CIFAR-10 dataset
+transform = transforms.Compose(
+    [transforms.ToTensor(),
+     transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 
-train_dataset = torchvision.datasets.MNIST(root="/work3/aveno/MNIST/data", train=True, transform=transform, download=True)
+data_path = "/work3/aveno/CIFAR10/data"
+
+# Load the training dataset
+train_dataset = torchvision.datasets.CIFAR10(root=data_path, train=True, transform=transform, download=True)
 train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=64, shuffle=True)
 
+# Concatenate all training samples and labels
 train_samples = []
 train_labels = []
 for images, labels in train_loader:
     train_samples.append(images)
     train_labels.append(labels)
-xinp_train = torch.cat(train_samples, dim=0)
-y_train = torch.cat(train_labels, dim=0)
+xinp_train = torch.cat(train_samples, dim=0).cuda()
+y_train = torch.cat(train_labels, dim=0).cuda()
 
-KERNEL_SIZE = 4
-STRIDE = 4
+KERNEL_SIZE = 8
+STRIDE = 8
 
+# Preprocess the training data
 xinp_train = F.unfold(xinp_train, kernel_size=(KERNEL_SIZE,KERNEL_SIZE), stride=(STRIDE,STRIDE), padding=0).transpose(-2, -1)
-xinp_train = torch.cat((xinp_train, torch.zeros((xinp_train.shape[0], 1, xinp_train.shape[2]), device=xinp_train.device)), dim=-2).cuda()
-xinp_train = torch.cat((xinp_train, torch.zeros((xinp_train.shape[0], xinp_train.shape[1], 1), device=xinp_train.device)), dim=-1).cuda()
+xinp_train = torch.cat((xinp_train, torch.zeros((xinp_train.shape[0], 1, xinp_train.shape[2]), device=xinp_train.device)), dim=-2)
+xinp_train = torch.cat((xinp_train, torch.zeros((xinp_train.shape[0], xinp_train.shape[1], 1), device=xinp_train.device)), dim=-1)
 xinp_train[..., -1, -1] = 1.0
-y_train = F.one_hot(y_train, num_classes=10).to(dtype=torch.float64).cuda()
+y_train = F.one_hot(y_train, num_classes=10).to(dtype=torch.float64)
 
 # Do a random split of train into train and val
 seed = 42
@@ -45,20 +50,28 @@ train_idx, val_idx = idx[:split], idx[split:]
 xinp_train, xinp_val = xinp_train[train_idx], xinp_train[val_idx]
 y_train, y_val = y_train[train_idx], y_train[val_idx]
 
-test_dataset = torchvision.datasets.MNIST(root="/work3/aveno/MNIST/data", train=False, transform=transform, download=True)
-test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=64, shuffle=True)
+
+# Load the test dataset
+test_dataset = torchvision.datasets.CIFAR10(root=data_path, train=False,
+                                    download=True, transform=transform)
+test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=64, shuffle=False)
+
+# Concatenate all test samples and labels
 test_samples = []
 test_labels = []
 for images, labels in test_loader:
     test_samples.append(images)
     test_labels.append(labels)
-xinp_test = torch.cat(test_samples, dim=0)
-y_test = torch.cat(test_labels, dim=0)
+xinp_test = torch.cat(test_samples, dim=0).cuda()
+y_test = torch.cat(test_labels, dim=0).cuda()
+
+# Preprocess the test data
 xinp_test = F.unfold(xinp_test, kernel_size=(KERNEL_SIZE,KERNEL_SIZE), stride=(STRIDE,STRIDE), padding=0).transpose(-2, -1)
-xinp_test = torch.cat((xinp_test, torch.zeros((xinp_test.shape[0], 1, xinp_test.shape[2]), device=xinp_test.device)), dim=-2).cuda()
-xinp_test = torch.cat((xinp_test, torch.zeros((xinp_test.shape[0], xinp_test.shape[1], 1), device=xinp_test.device)), dim=-1).cuda()
+xinp_test = torch.cat((xinp_test, torch.zeros((xinp_test.shape[0], 1, xinp_test.shape[2]), device=xinp_test.device)), dim=-2)
+xinp_test = torch.cat((xinp_test, torch.zeros((xinp_test.shape[0], xinp_test.shape[1], 1), device=xinp_test.device)), dim=-1)
 xinp_test[..., -1, -1] = 1.0
-y_test = F.one_hot(y_test, num_classes=10).to(dtype=torch.float64).cuda()
+y_test = F.one_hot(y_test, num_classes=10).to(dtype=torch.float64)
+
 
 # %%
 from tensor.layers import TensorConvolutionTrainLayer, TensorNetworkLayer
@@ -70,9 +83,9 @@ from matplotlib import pyplot as plt
 
 num_swipes = 3
 
-N = 3
-r = 14
-CB = 6
+N = 4
+r = 12
+CB = -1
 trajectory = []
 epoch = 0
 def convergence_criterion():
@@ -102,8 +115,7 @@ for i in range(1, N+1):
 layer = TensorNetworkLayer(
     SumOfNetworks(
         nets,
-        only_bias_first=True,
-        train_linear=True
+        train_operators=True
     )
 ).cuda()
 print('Num params:', layer.num_parameters())

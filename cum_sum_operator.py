@@ -20,6 +20,28 @@ for n in range(N):
         D[i, i, i, 0 if n == N-1 else i] = 1
     C = torch.einsum('ij,j...->i...', H, D)
     ops.append(C)
+
+#%%
+ops2 = []
+for n in range(N):
+    # Left bond dimension is 1 for the first operator, p otherwise
+    left_dim = 1 if n == 0 else p
+    # Right bond dimension is 1 for the last operator, p otherwise
+    right_dim = 1 if n == N - 1 else p
+
+    # H is the upper-triangular matrix of ones for summation
+    H = torch.triu(torch.ones((left_dim, p)), diagonal=0)
+    
+    # D is the diagonal tensor for propagating the result
+    D = torch.zeros((p, p, p, right_dim))
+    for i in range(p):
+        D[i, i, i, 0 if n == N - 1 else i] = 1
+
+    # C is the final operator tensor for this node
+    C = torch.einsum('ij,jklm->iklm', H, D)
+    ops2.append(C)
+#%%
+print([(o-o2).square().sum() for o, o2 in zip(ops, ops2)])
 #%%
 layer = TensorOperatorLayer(ops, p, r, N).cuda()
 #%%

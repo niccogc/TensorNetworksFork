@@ -4,9 +4,15 @@ from functools import partial
 import torch
 from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.metrics import r2_score, root_mean_squared_error, accuracy_score
-from tensor.layers import TensorTrainLayer, CumSumLayer, TensorTrainLinearLayer, TensorNetworkLayer, CPDLayer
-from tensor.network import SumOfNetworks
+from tensor.layers import TensorTrainLayer
 from tensor.bregman import SquareBregFunction
+
+def fbasis(X):
+    Input = []
+    for i in range(X.shape[-1]):
+        T = torch.stack([torch.cos(X[:, i]), torch.sin(X[:,i])], dim=-1)
+        Input.append(T)
+    return Input
 
 def root_mean_squared_error_torch(y_true, y_pred):
     y_true = y_true.cpu().numpy()
@@ -84,26 +90,23 @@ class EarlyStopping:
 
         return False
 
-class TensorTrainRegressor(BaseEstimator, RegressorMixin):
-    def __init__(self, N=3, r=8, output_dim=1, linear_dim=None,
-                 constrict_bond=False, perturb=False, seed=42,
+class TNMLRegressor(BaseEstimator, RegressorMixin):
+    def __init__(self, r=8, output_dim=1, seed=42,
                  device='cuda', bf=None,
                  lr=1.0, eps_start=1.0, eps_decay=0.5,
-                 abs_err=1e-4, rel_err=1e-3,
+                 abs_err=1e-6, rel_err=1e-4,
                  batch_size=512, method='ridge_cholesky',
                  num_swipes=30,
                  model_type='tt',
                  task='regression',
                  train_operator=False,
-                 cum_sum=False,
                  early_stopping=0,
                  verbose=0):
-        self.N = N
         self.r = r
+        self.input_dim = 2
         self.output_dim = output_dim
-        self.linear_dim = linear_dim if linear_dim is not None and linear_dim > 0 else None
-        self.constrict_bond = constrict_bond
-        self.perturb = perturb
+        self.constrict_bond = True
+        self.perturb = False
         self.seed = seed
         self.device = device
         self.bf = bf if bf is not None else SquareBregFunction()
@@ -118,7 +121,6 @@ class TensorTrainRegressor(BaseEstimator, RegressorMixin):
         self.model_type = model_type
         self.task = task
         self.train_operator = train_operator
-        self.cum_sum = cum_sum
         self.early_stopping = early_stopping
         self.verbose = verbose
 
@@ -129,79 +131,11 @@ class TensorTrainRegressor(BaseEstimator, RegressorMixin):
     def _initialize_model(self):
         if self.input_dim is None:
             raise ValueError("input_dim must be set")
-        if isinstance(self.linear_dim, float) and 0 < self.linear_dim < 1:
-            self.linear_dim = int(self.linear_dim * self.input_dim)
-        if self.model_type.startswith('cpd'):
-            if 'type1' in self.model_type or 'typeI' in self.model_type:
-                train_layers = [CPDLayer(
-                                    i,
-                                    self.r,
-                                    self.input_dim-1 if i != 1 else self.input_dim,
-                                    output_shape=self.output_dim,
-                                    perturb=self.perturb,
-                                    seed=self.seed + i
-                                ).tensor_network for i in range(1, self.N+1)]
-                self._model = TensorNetworkLayer(SumOfNetworks(train_layers, output_labels=train_layers[0].output_labels, train_operators=self.train_operator)).to(self.device)
-            else:
-                self._model = CPDLayer(self.N, self.r, self.input_dim,
-                                    output_shape=self.output_dim,
-                                    perturb=self.perturb,
-                                    seed=self.seed).to(self.device)
-        elif self.model_type.startswith('tt'):
-            if 'type1' in self.model_type or 'typeI' in self.model_type:
-                if self.cum_sum:
-                    train_layers = [CumSumLayer(
-                                        i,
-                                        bond_dim=self.r,
-                                        input_features=self.input_dim-1 if i != 1 else self.input_dim,
-                                        output_shape=self.output_dim,
-                                        constrict_bond=self.constrict_bond,
-                                        perturb=self.perturb,
-                                        seed=self.seed + i
-                                    ).tensor_network for i in range(1, self.N+1)]
-                    self._model = TensorNetworkLayer(SumOfNetworks(train_layers, output_labels=train_layers[0].output_labels, train_operators=self.train_operator)).to(self.device)
-                elif self.linear_dim is None or self.linear_dim >= self.input_dim:
-                    train_layers = [TensorTrainLayer(
-                                        i,
-                                        bond_dim=self.r,
-                                        input_features=self.input_dim-1 if i != 1 else self.input_dim,
-                                        output_shape=self.output_dim,
-                                        constrict_bond=self.constrict_bond,
-                                        perturb=self.perturb,
-                                        seed=self.seed + i
-                                    ).tensor_network for i in range(1, self.N+1)]
-                    self._model = TensorNetworkLayer(SumOfNetworks(train_layers, output_labels=train_layers[0].output_labels, train_operators=self.train_operator)).to(self.device)
-                else:
-                    train_layers = [TensorTrainLinearLayer(
-                                    i,
-                                    bond_dim=self.r,
-                                    input_features=self.input_dim-1 if i != 1 else self.input_dim,
-                                    linear_dim=self.linear_dim,
+        self._model = TensorTrainLayer(self.N, self.r, self.input_dim,
                                     output_shape=self.output_dim,
                                     constrict_bond=self.constrict_bond,
                                     perturb=self.perturb,
-                                    seed=self.seed + i
-                                ).tensor_network for i in range(1, self.N+1)]
-                    self._model = TensorNetworkLayer(SumOfNetworks(train_layers, output_labels=train_layers[0].output_labels, train_operators=self.train_operator)).to(self.device)
-            else:
-                if self.cum_sum:
-                    self._model = CumSumLayer(self.N, self.r, self.input_dim,
-                                            output_shape=self.output_dim,
-                                            constrict_bond=self.constrict_bond,
-                                            perturb=self.perturb,
-                                            seed=self.seed).to(self.device)
-                elif self.linear_dim is None or self.linear_dim >= self.input_dim:
-                    self._model = TensorTrainLayer(self.N, self.r, self.input_dim,
-                                                output_shape=self.output_dim,
-                                                constrict_bond=self.constrict_bond,
-                                                perturb=self.perturb,
-                                                seed=self.seed).to(self.device)
-                else:
-                    self._model = TensorTrainLinearLayer(self.N, self.r, self.input_dim, self.linear_dim,
-                                                        output_shape=self.output_dim,
-                                                        constrict_bond=self.constrict_bond,
-                                                        perturb=self.perturb,
-                                                        seed=self.seed).to(self.device)
+                                    seed=self.seed).to(self.device)
         if self.verbose > 2:
             print("Number of parameters:", self._model.num_parameters())
 
@@ -212,14 +146,8 @@ class TensorTrainRegressor(BaseEstimator, RegressorMixin):
         if isinstance(y, np.ndarray):
             y = torch.tensor(y, dtype=torch.float64, device=self.device)
 
-        # if y.ndim == 1:
-        #     y = y.unsqueeze(1)
-
-        # Append 1 to X for bias term
-        X = torch.cat((X, torch.ones((X.shape[0], 1), dtype=torch.float64, device=self.device)), dim=1)
-
         if self._model is None:
-            self.input_dim = X.shape[1]
+            self.N = X.shape[1]
             self._initialize_model()
         
         if self.verbose > 0:
@@ -248,8 +176,8 @@ class TensorTrainRegressor(BaseEstimator, RegressorMixin):
             #     y_val = y_val.unsqueeze(1)
             X_train, y_train = X, y
 
-            if X_val.shape[1] != X_train.shape[1]:
-                X_val = torch.cat((X_val, torch.ones((X_val.shape[0], 1), dtype=torch.float64, device=self.device)), dim=1)
+        X_train = fbasis(X_train)
+        X_val = fbasis(X_val)
 
         self._early_stopper = EarlyStopping(
             X_val, y_val,
@@ -270,7 +198,7 @@ class TensorTrainRegressor(BaseEstimator, RegressorMixin):
             eps=self.eps,
             eps_decay=self.eps_decay,
             convergence_criterion=self._early_stopper.convergence_criterion,
-            orthonormalize=False,
+            orthonormalize=True,
             method=self.method,
             verbose=self.verbose,
             num_swipes=self.num_swipes,
@@ -288,8 +216,7 @@ class TensorTrainRegressor(BaseEstimator, RegressorMixin):
     def predict(self, X):
         if isinstance(X, np.ndarray):
             X = torch.tensor(X, dtype=torch.float64, device=self.device)
-        # Append 1 to X for bias term
-        X = torch.cat((X, torch.ones(X.shape[0], 1, dtype=torch.float64, device=self.device)), dim=1)
+        X = fbasis(X)
         y_pred = self._model.tensor_network.forward_batch(X, self.batch_size)
         return y_pred.detach().cpu().numpy()
 
@@ -299,7 +226,6 @@ class TensorTrainRegressor(BaseEstimator, RegressorMixin):
             X = torch.tensor(X, dtype=torch.float64, device=self.device)
         if not isinstance(y_true, np.ndarray):
             y_true = y_true.cpu().numpy()
-        # Append 1 to X for bias term
-        X = torch.cat((X, torch.ones(X.shape[0], 1, dtype=torch.float64, device=self.device)), dim=1)
+        X = fbasis(X)
         y_pred = self._model.tensor_network.forward_batch(X, self.batch_size).squeeze().detach().cpu().numpy()
         return r2_score(y_true, y_pred) if self.task == 'regression' else accuracy_score(y_true, np.argmax(y_pred, axis=1))
