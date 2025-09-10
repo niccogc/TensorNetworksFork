@@ -89,7 +89,7 @@ class TensorTrainRegressor(BaseEstimator, RegressorMixin):
                  constrict_bond=False, perturb=False, seed=42,
                  device='cuda', bf=None,
                  lr=1.0, eps_start=1.0, eps_decay=0.5,
-                 abs_err=1e-6, rel_err=1e-4,
+                 abs_err=1e-4, rel_err=1e-3,
                  batch_size=512, method='ridge_cholesky',
                  num_swipes=30,
                  model_type='tt',
@@ -135,8 +135,8 @@ class TensorTrainRegressor(BaseEstimator, RegressorMixin):
             if 'type1' in self.model_type or 'typeI' in self.model_type:
                 train_layers = [CPDLayer(
                                     i,
-                                    rank=self.r,
-                                    input_features=self.input_dim-1 if i != 1 else self.input_dim,
+                                    self.r,
+                                    self.input_dim-1 if i != 1 else self.input_dim,
                                     output_shape=self.output_dim,
                                     perturb=self.perturb,
                                     seed=self.seed + i

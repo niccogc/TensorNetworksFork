@@ -125,7 +125,7 @@ if __name__ == '__main__':
     args.data_device = 'cuda'
     args.model_type = 'tt'
 
-    rs = [4, 8, 12]
+    args.r = 25
     args.num_swipes = 100
     args.lr = 1.0
     args.eps_start = 5.0
@@ -145,14 +145,12 @@ if __name__ == '__main__':
         dataset = path.split('/')[-1].replace('_tensor.pt', '')
         args.path = path
         args.task = task
-        for r in rs:
-            args.r = r
-            for seed in seeds:
-                args.seed = seed
-                print(f"Training {dataset} with r={r}")
-                result = train_model(args)
-                data.append((dataset, np.nan, r, np.nan, result['val_rmse'], result['val_r2'], result['val_accuracy'], result['num_params'], result['converged_epoch'], seed))
-                print(f"Result: {result}")
+        for seed in seeds:
+            args.seed = seed
+            print(f"Training {dataset}")
+            result = train_model(args)
+            data.append((dataset, np.nan, args.r, np.nan, result['val_rmse'], result['val_r2'], result['val_accuracy'], result['num_params'], result['converged_epoch'], seed))
+            print(f"Result: {result}")
     
     df = pd.DataFrame(data, columns=['dataset', 'N', 'r', 'lin_dim', 'val_rmse', 'val_r2', 'val_accuracy', 'num_params', 'converged_epoch', 'seed'])
     df['num_swipes'] = args.num_swipes

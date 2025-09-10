@@ -1583,11 +1583,18 @@ class CPDLayer(TensorNetworkLayer):
             out_dim = self.output_shape[i-1] if i-1 < len(self.output_shape) else 1
             # For the first factor, add an o leg for output, otherwise not
             if i == 1:
-                node = TensorNode(
-                    (rank, input_features, out_dim),
-                    ['b', 'p', 'o'],
-                    name=f"A{i}"
-                )
+                if num_factors == 1:
+                    node = TensorNode(
+                        (input_features, out_dim),
+                        ['p', 'o'],
+                        name=f"A{i}"
+                    )
+                else:
+                    node = TensorNode(
+                        (rank, input_features, out_dim),
+                        ['b', 'p', 'o'],
+                        name=f"A{i}"
+                    )
                 self.labels.append('o')
             elif i == num_factors:
                 shape_or_tensor = (rank, input_features)
@@ -1608,7 +1615,7 @@ class CPDLayer(TensorNetworkLayer):
                     name=f"A{i}"
                 )
             self.nodes.append(node)
-
+        
         # 3. Connect input nodes to factor nodes along 'p'
         for x, a in zip(self.x_nodes, self.nodes):
             x.connect(a, 'p')

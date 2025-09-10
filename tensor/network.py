@@ -1016,10 +1016,11 @@ class SumOfNetworks(TensorNetwork):
             if node in net.nodes:
                 return net.get_A_b(node, grad, hessian)
         raise ValueError("Node not found in any network")
-
+    
     def reset_stacks(self, node=None):
         for net in self.networks:
-            net.reset_stacks(node)
+            if node in net.nodes:
+                net.reset_stacks(node)
 
     def recompute_all_stacks(self):
         for net in self.networks:
