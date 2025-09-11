@@ -15,7 +15,7 @@ if __name__ == '__main__':
     ]
     args.device = 'cuda'
     args.data_device = 'cuda'
-    args.model_type = 'tt'
+    args.model_type = 'tt_cumsum'
     args.cum_sum = True
 
     Ns = [3, 4, 5]
@@ -29,7 +29,7 @@ if __name__ == '__main__':
     args.early_stopping = 10
 
     args.verbose = 1
-    args.method = 'ridge_exact'
+    args.method = 'ridge_cholesky'
     args.lin_dim = None
 
     seeds = list(range(42, 42+5))

@@ -197,9 +197,7 @@ class XEAutogradBregman(BregFunction):
         z = self.w * x # shape [..., C]
         z = torch.cat((z, torch.zeros_like(z[..., :1])), dim=-1) # append 0 to logits
 
-        log_s = torch.log_softmax(z, dim=-1) #append 0 and softmax -> remove 0
-
-        loss = F.cross_entropy(log_s, y.argmax(dim=-1), reduction='none') # shape [..., C]
+        loss = F.cross_entropy(z, y.argmax(dim=-1), reduction='none') # shape [..., C]
         if only_loss:
             return loss
 

@@ -21,14 +21,14 @@ if __name__ == '__main__':
     rs = [4, 8, 12, 16, 64, 144]
     args.num_swipes = 100
     args.lr = 1.0
-    args.eps_start = 5.0
+    args.eps_start = 1000.0
     args.eps_decay = 0.75
 
     args.batch_size = 1024
     args.early_stopping = 10
 
     args.verbose = 1
-    args.method = 'ridge_exact'
+    args.method = 'ridge_cholesky'
     args.lin_dim = None
 
     seeds = list(range(42, 42+5))

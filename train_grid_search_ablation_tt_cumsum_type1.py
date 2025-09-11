@@ -15,7 +15,7 @@ if __name__ == '__main__':
     ]
     args.device = 'cuda'
     args.data_device = 'cuda'
-    args.model_type = 'tt_type1'
+    args.model_type = 'tt_type1_cumsum'
     args.cum_sum = True
 
     Ns = [3, 4, 5]

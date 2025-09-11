@@ -4,7 +4,7 @@ import torch
 import numpy as np
 torch.set_default_dtype(torch.float64)
 from models.tensor_train import TensorTrainRegressor
-from tensor.bregman import AutogradLoss
+from tensor.bregman import AutogradLoss, XEAutogradBregman
 from sklearn.metrics import accuracy_score, root_mean_squared_error, r2_score
 
 # ---- Tabular data loader ----
@@ -63,19 +63,19 @@ def train_model(args, data=None):
         y_test = torch.nn.functional.one_hot(y_test.to(dtype=torch.long), num_classes=num_classes).squeeze(1)
 
     # Model setup and training (unified for all models)
-    output_dim = y_train.shape[1]
+    output_dim = y_train.shape[1] if args.task == 'regression' else y_train.shape[1]-1
         
     X_train = X_train.to(torch.float64)
-    y_train = y_train.argmax(dim=-1) if args.task == 'classification' else y_train.to(torch.float64)
+    y_train = y_train.to(torch.float64)
     X_val = X_val.to(torch.float64)
-    y_val = y_val.argmax(dim=-1) if args.task == 'classification' else y_val.to(torch.float64)
+    y_val = y_val.to(torch.float64)
     X_test = X_test.to(torch.float64)
-    y_test = y_test.argmax(dim=-1) if args.task == 'classification' else y_test.to(torch.float64)
+    y_test = y_test.to(torch.float64)
     
     if args.task == 'regression':
         bf = AutogradLoss(torch.nn.MSELoss(reduction='none')) 
     else:
-        bf = AutogradLoss(torch.nn.CrossEntropyLoss(reduction='none'))
+        bf = XEAutogradBregman(w=1)
 
     # Use torch tensors for tensor train
     model = TensorTrainRegressor(

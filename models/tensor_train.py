@@ -22,6 +22,8 @@ def unexplained_variance(y_true, y_pred):
 def error_rate_torch(y_true, y_pred):
     y_pred_labels = torch.argmax(y_pred, dim=1).cpu().numpy()
     y_true_labels = y_true.cpu().numpy()
+    if y_true_labels.ndim > 1 and y_true_labels.shape[1] > 1:
+        y_true_labels = np.argmax(y_true_labels, axis=1)
     return 1.0 - accuracy_score(y_true_labels, y_pred_labels)
 
 class EarlyStopping:
@@ -251,9 +253,15 @@ class TensorTrainRegressor(BaseEstimator, RegressorMixin):
             if X_val.shape[1] != X_train.shape[1]:
                 X_val = torch.cat((X_val, torch.ones((X_val.shape[0], 1), dtype=torch.float64, device=self.device)), dim=1)
 
+        def model_predict(X_batch):
+            y_pred = self._model.tensor_network.forward_batch(X_batch, self.batch_size)
+            if self.task == 'classification':
+                y_pred = torch.cat([y_pred, torch.zeros_like(y_pred[..., :1])], dim=-1)
+            return y_pred
+
         self._early_stopper = EarlyStopping(
             X_val, y_val,
-            model_predict=partial(self._model.tensor_network.forward_batch, batch_size=self.batch_size),
+            model_predict=model_predict,
             get_model_weights=self._model.node_states,
             loss_fn=root_mean_squared_error_torch if self.task == 'regression' else error_rate_torch,
             abs_err=self.abs_err,
@@ -291,6 +299,8 @@ class TensorTrainRegressor(BaseEstimator, RegressorMixin):
         # Append 1 to X for bias term
         X = torch.cat((X, torch.ones(X.shape[0], 1, dtype=torch.float64, device=self.device)), dim=1)
         y_pred = self._model.tensor_network.forward_batch(X, self.batch_size)
+        if self.task == 'classification':
+            y_pred = torch.cat([y_pred, torch.zeros_like(y_pred[..., :1])], dim=-1)
         return y_pred.detach().cpu().numpy()
 
     def score(self, X, y_true):
@@ -299,7 +309,5 @@ class TensorTrainRegressor(BaseEstimator, RegressorMixin):
             X = torch.tensor(X, dtype=torch.float64, device=self.device)
         if not isinstance(y_true, np.ndarray):
             y_true = y_true.cpu().numpy()
-        # Append 1 to X for bias term
-        X = torch.cat((X, torch.ones(X.shape[0], 1, dtype=torch.float64, device=self.device)), dim=1)
-        y_pred = self._model.tensor_network.forward_batch(X, self.batch_size).squeeze().detach().cpu().numpy()
+        y_pred = self.predict(X)
         return r2_score(y_true, y_pred) if self.task == 'regression' else accuracy_score(y_true, np.argmax(y_pred, axis=1))
