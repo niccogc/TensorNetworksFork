@@ -132,7 +132,7 @@ class TensorTrainRegressor(BaseEstimator, RegressorMixin):
         if self.input_dim is None:
             raise ValueError("input_dim must be set")
         if isinstance(self.linear_dim, float) and 0 < self.linear_dim < 1:
-            self.linear_dim = int(self.linear_dim * self.input_dim)
+            self.linear_dim = max(int(self.linear_dim * self.input_dim), 1)
         if self.model_type.startswith('cpd'):
             if 'type1' in self.model_type or 'typeI' in self.model_type:
                 train_layers = [CPDLayer(

@@ -129,7 +129,7 @@ if __name__ == '__main__':
     args.num_swipes = 100
     args.lr = 1.0
     args.eps_start = 5.0
-    args.eps_decay = 0.75
+    args.eps_decay = 0.25
 
     args.batch_size = 1024
     args.early_stopping = 10
