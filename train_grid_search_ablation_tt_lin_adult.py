@@ -8,25 +8,7 @@ import pandas as pd
 import numpy as np
 
 datasets = [
-  ('student_perf', 320, 'regression'),
-  ('abalone', 1, 'regression'),
-  ('obesity', 544, 'regression'),
-  ('bike', 275, 'regression'),
-  ('realstate', 477, 'regression'),
-  ('energy_efficiency', 242, 'regression'),
-  ('concrete', 165, 'regression'),
-  ('ai4i', 601, 'regression'),
-  ('appliances', 374, 'regression'),
-  ('popularity', 332, 'regression'),
-  ('iris', 53, 'classification'),
-  ('hearth', 45, 'classification'),
-  ('winequalityc', 186, 'classification'),
-  ('breast', 17, 'classification'),
-  ('bank', 222, 'classification'),
-  ('wine', 109, 'classification'),
-  ('car_evaluation', 19, 'classification'),
-  ('student_dropout', 697, 'classification'),
-  ('mushrooms', 73, 'classification')
+  ('adult', 2, 'classification'),
 ]
 
 if __name__ == '__main__':
@@ -106,5 +88,5 @@ if __name__ == '__main__':
         print(f"Final Result: {result}")
         
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        with open(f'./results/test_results_{args.model_type}.csv', 'a+') as f:
+        with open(f'./results/test_results_{args.model_type}_adult.csv', 'a+') as f:
             f.write(f"{timestamp},{args.model_type},{dataset},{args.N},{args.r},{args.lin_dim},{result['test_rmse']},{result['test_r2']},{result['test_accuracy']},{result['num_params']},{result['converged_epoch']}\n")

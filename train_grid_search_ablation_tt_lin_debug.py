@@ -35,9 +35,9 @@ if __name__ == '__main__':
     args.data_device = 'cuda'
     args.model_type = 'tt_lin'
 
-    Ns = [2, 3, 4, 5, 6]
-    rs = [4, 8, 12, 16]
-    lin_dims = [0.25, 0.5, 0.75]
+    Ns = [2]
+    rs = [4]
+    lin_dims = [0.25]
     args.num_swipes = 100
     args.lr = 1.0
     args.eps_start = 5.0

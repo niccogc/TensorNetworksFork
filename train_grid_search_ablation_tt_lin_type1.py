@@ -8,6 +8,16 @@ import pandas as pd
 import numpy as np
 
 datasets = [
+  ('adult', 2, 'classification'),
+  ('iris', 53, 'classification'),
+  ('hearth', 45, 'classification'),
+  ('winequalityc', 186, 'classification'),
+  ('breast', 17, 'classification'),
+  ('bank', 222, 'classification'),
+  ('wine', 109, 'classification'),
+  ('car_evaluation', 19, 'classification'),
+  ('student_dropout', 697, 'classification'),
+  ('mushrooms', 73, 'classification'),
   ('student_perf', 320, 'regression'),
   ('abalone', 1, 'regression'),
   ('obesity', 544, 'regression'),
@@ -18,16 +28,6 @@ datasets = [
   ('ai4i', 601, 'regression'),
   ('appliances', 374, 'regression'),
   ('popularity', 332, 'regression'),
-  ('iris', 53, 'classification'),
-  ('hearth', 45, 'classification'),
-  ('winequalityc', 186, 'classification'),
-  ('breast', 17, 'classification'),
-  ('adult', 2, 'classification'),
-  ('bank', 222, 'classification'),
-  ('wine', 109, 'classification'),
-  ('car_evaluation', 19, 'classification'),
-  ('student_dropout', 697, 'classification'),
-  ('mushrooms', 73, 'classification')
 ]
 
 if __name__ == '__main__':
@@ -55,10 +55,13 @@ if __name__ == '__main__':
     for dataset, dataset_id, task in datasets:
         results = []
         data = get_ucidata(dataset_id, task, args.data_device)
+        num_features = data[0].shape[1]
         args.task = task
         for N in Ns:
             for r in rs:
                 for lin_dim in lin_dims:
+                    if num_features > 50 and r > 10:
+                        continue
                     for seed in seeds:
                         try:
                             args.N = N
@@ -71,6 +74,7 @@ if __name__ == '__main__':
                             print(f"Result: {result}")
                         except:
                             print("Failed, skipping...")
+                            torch.cuda.empty_cache()
                             continue
     
         df = pd.DataFrame(results, columns=['dataset', 'N', 'r', 'lin_dim', 'val_rmse', 'val_r2', 'val_accuracy', 'num_params', 'converged_epoch', 'seed'])
@@ -87,26 +91,15 @@ if __name__ == '__main__':
 
         # Take the best one and run it on the test set
         # First we aggregate over seeds to find the best (N, r) pair
-        df_agg = df.groupby(['N', 'r']).agg({'val_rmse': 'mean', 'val_accuracy': 'mean'}).reset_index()
+        df_agg = df.groupby(['N', 'r', 'lin_dim']).agg({'val_rmse': 'mean', 'val_accuracy': 'mean'}).reset_index()
         if task == 'regression':
             best_row = df_agg.loc[df_agg['val_rmse'].idxmin()]
         else:
             best_row = df_agg.loc[df_agg['val_accuracy'].idxmax()]
         
-        try:
-            args.N = int(best_row['N'])
-            args.r = int(best_row['r'])
-            args.lin_dim = float(best_row['lin_dim'])
-        except:
-            args.N = 3
-            args.r = 12
-            args.lin_dim = 0.5
-            print("============================================")
-            print("============================================")
-            print("WARNING!: Failed to select best hyperparameters, using default N=3, r=12")
-            print(f"WARNING!: Failed for {dataset}, task={task}")
-            print("============================================")
-            print("============================================")
+        args.N = int(best_row['N'])
+        args.r = int(best_row['r'])
+        args.lin_dim = float(best_row['lin_dim'])
         
         args.seed = 1337  # Fixed seed for final evaluation
         print(f"Final evaluation on test set for {dataset} with N={args.N}, r={args.r}")
