@@ -74,6 +74,8 @@ class EarlyStopping:
                 self.early_stop_count = 0
             else:
                 self.early_stop_count += 1
+            if self.verbose > 0:
+                print(f"Epoch {self.epoch}: Val loss {val_loss:.4f} (diff: {improvement:.4f}).")
         else:
             # No improvement at all
             self.early_stop_count += 1
