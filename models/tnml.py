@@ -14,6 +14,13 @@ def fbasis(X):
         Input.append(T)
     return Input
 
+def polynomial_basis(X, degree=3):
+    Input = []
+    for i in range(X.shape[-1]):
+        T = torch.stack([X[:, i]**d for d in range(degree+1)], dim=-1)
+        Input.append(T)
+    return Input
+
 def root_mean_squared_error_torch(y_true, y_pred):
     y_true = y_true.cpu().numpy()
     y_pred = y_pred.cpu().numpy()
@@ -28,6 +35,8 @@ def unexplained_variance(y_true, y_pred):
 def error_rate_torch(y_true, y_pred):
     y_pred_labels = torch.argmax(y_pred, dim=1).cpu().numpy()
     y_true_labels = y_true.cpu().numpy()
+    if y_true_labels.ndim > 1 and y_true_labels.shape[1] > 1:
+        y_true_labels = np.argmax(y_true_labels, axis=1)
     return 1.0 - accuracy_score(y_true_labels, y_pred_labels)
 
 class EarlyStopping:
@@ -101,9 +110,11 @@ class TNMLRegressor(BaseEstimator, RegressorMixin):
                  task='regression',
                  train_operator=False,
                  early_stopping=0,
+                 basis='sin-cos', # 'sin-cos' or 'polynomial
+                 degree=3, # for polynomial basis
                  verbose=0):
         self.r = r
-        self.input_dim = 2
+        self.input_dim = degree+1 if basis == 'polynomial' else 2
         self.output_dim = output_dim
         self.constrict_bond = True
         self.perturb = False
@@ -122,6 +133,8 @@ class TNMLRegressor(BaseEstimator, RegressorMixin):
         self.task = task
         self.train_operator = train_operator
         self.early_stopping = early_stopping
+        self.basis = basis
+        self.degree = degree
         self.verbose = verbose
 
         self._model = None
@@ -176,12 +189,22 @@ class TNMLRegressor(BaseEstimator, RegressorMixin):
             #     y_val = y_val.unsqueeze(1)
             X_train, y_train = X, y
 
-        X_train = fbasis(X_train)
-        X_val = fbasis(X_val)
-
+        if self.basis == 'sin-cos':
+            X_train = fbasis(X_train)
+            X_val = fbasis(X_val)
+        elif self.basis == 'polynomial':
+            X_train = polynomial_basis(X_train, degree=self.degree)
+            X_val = polynomial_basis(X_val, degree=self.degree)
+        
+        def model_predict(X_batch):
+            y_pred = self._model.tensor_network.forward_batch(X_batch, self.batch_size)
+            if self.task == 'classification':
+                y_pred = torch.cat([y_pred, torch.zeros_like(y_pred[..., :1])], dim=-1)
+            return y_pred
+        
         self._early_stopper = EarlyStopping(
             X_val, y_val,
-            model_predict=partial(self._model.tensor_network.forward_batch, batch_size=self.batch_size),
+            model_predict=model_predict,
             get_model_weights=self._model.node_states,
             loss_fn=root_mean_squared_error_torch if self.task == 'regression' else error_rate_torch,
             abs_err=self.abs_err,
@@ -216,8 +239,13 @@ class TNMLRegressor(BaseEstimator, RegressorMixin):
     def predict(self, X):
         if isinstance(X, np.ndarray):
             X = torch.tensor(X, dtype=torch.float64, device=self.device)
-        X = fbasis(X)
+        if self.basis == 'sin-cos':
+            X = fbasis(X)
+        elif self.basis == 'polynomial':
+            X = polynomial_basis(X, degree=self.degree)
         y_pred = self._model.tensor_network.forward_batch(X, self.batch_size)
+        if self.task == 'classification':
+            y_pred = torch.cat([y_pred, torch.zeros_like(y_pred[..., :1])], dim=-1)
         return y_pred.detach().cpu().numpy()
 
     def score(self, X, y_true):
@@ -226,6 +254,5 @@ class TNMLRegressor(BaseEstimator, RegressorMixin):
             X = torch.tensor(X, dtype=torch.float64, device=self.device)
         if not isinstance(y_true, np.ndarray):
             y_true = y_true.cpu().numpy()
-        X = fbasis(X)
-        y_pred = self._model.tensor_network.forward_batch(X, self.batch_size).squeeze().detach().cpu().numpy()
+        y_pred = self.predict(X)
         return r2_score(y_true, y_pred) if self.task == 'regression' else accuracy_score(y_true, np.argmax(y_pred, axis=1))

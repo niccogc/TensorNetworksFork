@@ -3,25 +3,10 @@ import argparse
 import torch
 import numpy as np
 torch.set_default_dtype(torch.float64)
+from load_ucirepo import get_ucidata
 from models.tensor_train import TensorTrainRegressor
-from tensor.bregman import AutogradLoss
+from tensor.bregman import AutogradLoss, XEAutogradBregman
 from sklearn.metrics import accuracy_score, root_mean_squared_error, r2_score
-
-# ---- Tabular data loader ----
-def load_tabular_data(filename, device):
-    data = torch.load(filename, map_location=device)
-    X_train = data['X_train'].to(device)
-    y_train = data['y_train'].to(device)
-    X_val = data['X_val'].to(device)
-    y_val = data['y_val'].to(device)
-    X_test = data['X_test'].to(device)
-    y_test = data['y_test'].to(device)
-    if torch.all(X_train[:, -1] == 1) and torch.all(X_val[:, -1] == 1) and torch.all(X_test[:, -1] == 1):
-        X_train = X_train[:, :-1]
-        X_val = X_val[:, :-1]
-        X_test = X_test[:, :-1]
-
-    return X_train, y_train, X_val, y_val, X_test, y_test
 
 def evaluate_model(model, X, y_true, metric='accuracy'):
     y_pred = model.predict(X)
@@ -46,9 +31,9 @@ def evaluate_model(model, X, y_true, metric='accuracy'):
     else:
         raise ValueError(f"Unknown metric: {metric}")
 
-def train_model(args, data=None):
+def train_model(args, data=None, test=False):
     if data is None:
-        data = load_tabular_data(args.path, args.data_device)
+        data = get_ucidata(args.dataset_id, args.task, device=args.data_device)
     X_train, y_train, X_val, y_val, X_test, y_test = data
 
     # For each y, if it is not 2D, add a dimension
@@ -63,19 +48,19 @@ def train_model(args, data=None):
         y_test = torch.nn.functional.one_hot(y_test.to(dtype=torch.long), num_classes=num_classes).squeeze(1)
 
     # Model setup and training (unified for all models)
-    output_dim = y_train.shape[1]
+    output_dim = y_train.shape[1] if args.task == 'regression' else y_train.shape[1]-1
         
     X_train = X_train.to(torch.float64)
-    y_train = y_train.argmax(dim=-1) if args.task == 'classification' else y_train.to(torch.float64)
+    y_train = y_train.to(torch.float64)
     X_val = X_val.to(torch.float64)
-    y_val = y_val.argmax(dim=-1) if args.task == 'classification' else y_val.to(torch.float64)
+    y_val = y_val.to(torch.float64)
     X_test = X_test.to(torch.float64)
-    y_test = y_test.argmax(dim=-1) if args.task == 'classification' else y_test.to(torch.float64)
+    y_test = y_test.to(torch.float64)
     
     if args.task == 'regression':
         bf = AutogradLoss(torch.nn.MSELoss(reduction='none')) 
     else:
-        bf = AutogradLoss(torch.nn.CrossEntropyLoss(reduction='none'))
+        bf = XEAutogradBregman(w=1)
 
     # Use torch tensors for tensor train
     model = TensorTrainRegressor(
@@ -109,12 +94,34 @@ def train_model(args, data=None):
     num_params = model._model.num_parameters()
     converged_epoch = model._early_stopper.epoch
 
+    report_dict = {}
     if args.task == 'classification':
-        return {'val_rmse': np.nan, 'val_r2': np.nan, 'val_accuracy': val_score, 'num_params': num_params, 'converged_epoch': converged_epoch}
+        report_dict['val_rmse'] = np.nan
+        report_dict['val_r2'] = np.nan
+        report_dict['val_accuracy'] = val_score
+        report_dict['num_params'] = num_params
+        report_dict['converged_epoch'] = converged_epoch
     else:
         # Calculate R2 score as well
         r2_val = evaluate_model(model, X_val, y_val, metric='r2')
-        return {'val_rmse': val_score, 'val_r2': r2_val, 'val_accuracy': np.nan, 'num_params': num_params, 'converged_epoch': converged_epoch}
+        report_dict['val_rmse'] = val_score
+        report_dict['val_r2'] = r2_val
+        report_dict['val_accuracy'] = np.nan
+        report_dict['num_params'] = num_params
+        report_dict['converged_epoch'] = converged_epoch
+
+    if test:
+        test_score = evaluate_model(model, X_test, y_test, metric)
+        if args.task == 'classification':
+            report_dict['test_rmse'] = np.nan
+            report_dict['test_r2'] = np.nan
+            report_dict['test_accuracy'] = test_score
+        else:
+            r2_test = evaluate_model(model, X_test, y_test, metric='r2')
+            report_dict['test_rmse'] = test_score
+            report_dict['test_r2'] = r2_test
+            report_dict['test_accuracy'] = np.nan
+    return report_dict
     
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Tensor Network Training for Tabular Data')
