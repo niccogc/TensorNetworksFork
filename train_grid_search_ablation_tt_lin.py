@@ -8,25 +8,27 @@ import pandas as pd
 import numpy as np
 
 datasets = [
-  ('student_perf', 320, 'regression'),
-  ('abalone', 1, 'regression'),
-  ('obesity', 544, 'regression'),
-  ('bike', 275, 'regression'),
-  ('realstate', 477, 'regression'),
-  ('energy_efficiency', 242, 'regression'),
-  ('concrete', 165, 'regression'),
-  ('ai4i', 601, 'regression'),
-  ('appliances', 374, 'regression'),
-  ('popularity', 332, 'regression'),
-  ('iris', 53, 'classification'),
-  ('hearth', 45, 'classification'),
-  ('winequalityc', 186, 'classification'),
-  ('breast', 17, 'classification'),
-  ('bank', 222, 'classification'),
-  ('wine', 109, 'classification'),
-  ('car_evaluation', 19, 'classification'),
-  ('student_dropout', 697, 'classification'),
-  ('mushrooms', 73, 'classification')
+  # ('student_perf', 320, 'regression'),
+  # ('abalone', 1, 'regression'),
+  # ('obesity', 544, 'regression'),
+  # ('bike', 275, 'regression'),
+  # ('realstate', 477, 'regression'),
+  # ('energy_efficiency', 242, 'regression'),
+  # ('concrete', 165, 'regression'),
+  # ('ai4i', 601, 'regression'),
+  # ('appliances', 374, 'regression'),
+  # ('popularity', 332, 'regression'),
+  # ('iris', 53, 'classification'),
+  # ('hearth', 45, 'classification'),
+  # ('winequalityc', 186, 'classification'),
+  # ('breast', 17, 'classification'),
+  # ('bank', 222, 'classification'),
+  # ('wine', 109, 'classification'),
+  # ('car_evaluation', 19, 'classification'),
+  # ('student_dropout', 697, 'classification'),
+  # ('mushrooms', 73, 'classification')
+  # ('airQuality', 360, 'regression'),
+  ('seoulBike', 560, 'regression'),
 ]
 
 if __name__ == '__main__':

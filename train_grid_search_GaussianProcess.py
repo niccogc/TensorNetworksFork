@@ -23,26 +23,28 @@ def error_rate_torch(y_true, y_pred):
     return 1.0 - accuracy_score(y_true_labels, y_pred_labels)
 
 datasets = [
-  ('iris', 53, 'classification'),            # 150
-  ('wine', 109, 'classification'),           # 178
-  ('hearth', 45, 'classification'),          # 303
-  ('realstate', 477, 'regression'),          # 414
-  ('breast', 17, 'classification'),          # 569
-  ('student_perf', 320, 'regression'),       # 649
-  ('energy_efficiency', 242, 'regression'),  # 768
-  ('concrete', 165, 'regression'),           # 1030
-  ('car_evaluation', 19, 'classification'),  # 1728
-  ('obesity', 544, 'regression'),            # 2111
-  ('abalone', 1, 'regression'),              # 4177
-  ('student_dropout', 697, 'classification'),# 4424
-  ('winequalityc', 186, 'classification'),   # 6497
-  ('mushrooms', 73, 'classification'),       # 8124
-  ('ai4i', 601, 'regression'),               # 10000
-  ('bike', 275, 'regression'),               # 17379
-  ('appliances', 374, 'regression'),         # 19735
-  ('popularity', 332, 'regression'),         # 39644
-  ('bank', 222, 'classification'),           # 45211
-  ('adult', 2, 'classification'),            # 48842
+  # ('iris', 53, 'classification'),            # 150
+  # ('wine', 109, 'classification'),           # 178
+  # ('hearth', 45, 'classification'),          # 303
+  # ('realstate', 477, 'regression'),          # 414
+  # ('breast', 17, 'classification'),          # 569
+  # ('student_perf', 320, 'regression'),       # 649
+  # ('energy_efficiency', 242, 'regression'),  # 768
+  # ('concrete', 165, 'regression'),           # 1030
+  # ('car_evaluation', 19, 'classification'),  # 1728
+  # ('obesity', 544, 'regression'),            # 2111
+  # ('abalone', 1, 'regression'),              # 4177
+  # ('student_dropout', 697, 'classification'),# 4424
+  # ('winequalityc', 186, 'classification'),   # 6497
+  # ('mushrooms', 73, 'classification'),       # 8124
+  # ('ai4i', 601, 'regression'),               # 10000
+  # ('bike', 275, 'regression'),               # 17379
+  # ('appliances', 374, 'regression'),         # 19735
+  # ('popularity', 332, 'regression'),         # 39644
+  # ('bank', 222, 'classification'),           # 45211
+  # ('adult', 2, 'classification'),            # 48842
+  # ('airQuality', 360, 'regression'),
+  ('seoulBike', 560, 'regression'),
 ]
 
 
