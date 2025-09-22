@@ -4,10 +4,11 @@ torch.set_default_dtype(torch.float64)
 import numpy as np
 from load_ucirepo import get_ucidata
 from sklearn.metrics import accuracy_score, root_mean_squared_error, r2_score
+from sklearn.gaussian_process import GaussianProcessRegressor, GaussianProcessClassifier
+from sklearn.gaussian_process.kernels import RBF, Matern, DotProduct, WhiteKernel, ConstantKernel as C
 from datetime import datetime
 from dotdict import DotDict
 import pandas as pd
-import xgboost as xgb
 
 def root_mean_squared_error_torch(y_true, y_pred):
     y_true = y_true.cpu().numpy()
@@ -22,26 +23,26 @@ def error_rate_torch(y_true, y_pred):
     return 1.0 - accuracy_score(y_true_labels, y_pred_labels)
 
 datasets = [
-    ('iris', 53, 'classification'),
-    ('adult', 2, 'classification'),
-    ('hearth', 45, 'classification'),
-    ('winequalityc', 186, 'classification'),
-    ('breast', 17, 'classification'),
-    ('bank', 222, 'classification'),
-    ('wine', 109, 'classification'),
-    ('car_evaluation', 19, 'classification'),
-    ('student_dropout', 697, 'classification'),
-    ('mushrooms', 73, 'classification'),
-    ('student_perf', 320, 'regression'),
-    ('abalone', 1, 'regression'),
-    ('obesity', 544, 'regression'),
-    ('bike', 275, 'regression'),
-    ('realstate', 477, 'regression'),
-    ('energy_efficiency', 242, 'regression'),
-    ('concrete', 165, 'regression'),
-    ('ai4i', 601, 'regression'),
-    ('appliances', 374, 'regression'),
-    ('popularity', 332, 'regression'),
+    ('iris', 53, 'classification'),            # 150
+    ('wine', 109, 'classification'),           # 178
+    ('hearth', 45, 'classification'),          # 303
+    ('realstate', 477, 'regression'),          # 414
+    ('breast', 17, 'classification'),          # 569
+    ('student_perf', 320, 'regression'),       # 649
+    ('energy_efficiency', 242, 'regression'),  # 768
+    ('concrete', 165, 'regression'),           # 1030
+    ('car_evaluation', 19, 'classification'),  # 1728
+    ('obesity', 544, 'regression'),            # 2111
+    ('abalone', 1, 'regression'),              # 4177
+    ('student_dropout', 697, 'classification'),# 4424
+    ('winequalityc', 186, 'classification'),   # 6497
+    ('mushrooms', 73, 'classification'),       # 8124
+    ('ai4i', 601, 'regression'),               # 10000
+    ('bike', 275, 'regression'),               # 17379
+    ('appliances', 374, 'regression'),         # 19735
+    ('popularity', 332, 'regression'),         # 39644
+    ('bank', 222, 'classification'),           # 45211
+    ('adult', 2, 'classification'),            # 48842
     ('seoulBike', 560, 'regression'),
 ]
 
@@ -69,23 +70,19 @@ def evaluate_model(model, X, y_true, metric='accuracy'):
     else:
         raise ValueError(f"Unknown metric: {metric}")
 
-class XGBoost:
+class GaussianProcess:
     """
-    A unified wrapper for XGBoost that handles both regression and classification tasks.
+    A unified wrapper for Gaussian Processes that handles both regression and classification tasks.
     """
-    def __init__(self, task='regression', xgb_params=None):
+    def __init__(self, task='regression', kernel=None, alpha=1e-10):
         self.task = task
-        if xgb_params is None:
-            xgb_params = {}
+        self.kernel = kernel
+        self.alpha = alpha
 
-        # Use GPU for XGBoost if available and device is 'cuda'
-        if torch.cuda.is_available() and xgb_params.get('device') == 'cuda':
-             xgb_params['tree_method'] = 'hist'
-        
         if self.task == 'regression':
-            self.model = xgb.XGBRegressor(**xgb_params)
+            self.model = GaussianProcessRegressor(kernel=kernel, alpha=alpha, random_state=42)
         elif self.task == 'classification':
-            self.model = xgb.XGBClassifier(eval_metric='mlogloss', **xgb_params)
+            self.model = GaussianProcessClassifier(kernel=kernel, random_state=42)
         else:
             raise ValueError(f"Unknown task: {task}")
 
@@ -111,14 +108,9 @@ def train_model(args, data=None, test=False):
     X_train, y_train, X_val, y_val, X_test, y_test = data
 
     # Model setup
-    xgb_params = {
-        'n_estimators': args.n_estimators,
-        'max_depth': args.max_depth,
-        'learning_rate': args.lr,
-        'device': args.device  # Pass device to XGBoost
-    }
-    model = XGBoost(task=args.task, xgb_params=xgb_params)
+    model = GaussianProcess(task=args.task, kernel=args.kernel, alpha=args.alpha)
     model.fit(X_train, y_train)
+
     # Unified evaluation
     metric = 'accuracy' if args.task == 'classification' else 'rmse'
     val_score = evaluate_model(model, X_val, y_val, metric)
@@ -162,18 +154,64 @@ if __name__ == '__main__':
     args.device = 'cuda'
     args.data_device = 'cuda'
 
-    args.model_type = 'xgboost'
-    args.lr = 0.1  # fixed learning rate
+    args.model_type = 'gp'
 
-    # Hyperparameter grids
-    n_estimatorss = [50, 100, 200, 500]
-    max_depths = [3, 6, 9]
+    # Hyperparameter grids - GP specific
+    alphas = [1e-6]
+
+    def create_kernels(n_features):
+        kernels = []
+        kernel_names = []
+
+        # Base kernels with scalar length scales
+        base_kernels_scalar = [
+            (C(1.0) * RBF(), 'RBF'),
+            (C(1.0) * Matern(nu=2.5), 'Matern25'),
+            (DotProduct(), 'DotProduct'),
+            (C(1.0) * RBF() + DotProduct(), 'RBF_plus_DotProduct')
+        ]
+
+        # Base kernels with array length scales (ARD)
+        base_kernels_ard = [
+            (C(1.0) * RBF(length_scale=[1.0] * n_features), 'RBF_ARD'),
+            (C(1.0) * Matern(nu=2.5, length_scale=[1.0] * n_features), 'Matern25_ARD'),
+            (C(1.0) * RBF(length_scale=[1.0] * n_features) + DotProduct(), 'RBF_ARD_plus_DotProduct')
+        ]
+
+        # 1. Base kernels with scalar hyperparameters
+        for kernel, name in base_kernels_scalar:
+            kernels.append(kernel)
+            kernel_names.append(name)
+
+        # 2. Base kernels with array hyperparameters (ARD)
+        for kernel, name in base_kernels_ard:
+            kernels.append(kernel)
+            kernel_names.append(name)
+
+        # 3. Base kernels with scalar hyperparameters + WhiteKernel
+        for kernel, name in base_kernels_scalar:
+            kernels.append(kernel + WhiteKernel())
+            kernel_names.append(f'{name}_WhiteKernel')
+
+        # 4. Base kernels with array hyperparameters + WhiteKernel
+        for kernel, name in base_kernels_ard:
+            kernels.append(kernel + WhiteKernel())
+            kernel_names.append(f'{name}_WhiteKernel')
+
+        return kernels, kernel_names
 
     seeds = list(range(42, 42 + 5))
 
     for dataset, dataset_id, task in datasets:
         data = get_ucidata(dataset_id, task, args.data_device)
+        X_train, y_train, X_val, y_val, X_test, y_test = data
+        n_features = X_train.shape[1]
+
         args.task = task
+        args.dataset_id = dataset_id
+
+        # Create kernels based on the number of features
+        kernels, kernel_names = create_kernels(n_features)
 
         if skip_grid_search:
             # Load existing results from CSV
@@ -182,19 +220,20 @@ if __name__ == '__main__':
         else:
             # Perform grid search
             results = []
-            for n_estimators in n_estimatorss:
-                for max_depth in max_depths:
+            for kernel, kernel_name in zip(kernels, kernel_names):
+                for alpha in alphas:
                     try:
-                        args.n_estimators = n_estimators
-                        args.max_depth = max_depth
+                        args.kernel = kernel
+                        args.kernel_name = kernel_name
+                        args.alpha = alpha
 
-                        print(f"Training {dataset} with n_estimators {n_estimators}, max_depth {max_depth}", file=sys.stdout, flush=True)
+                        print(f"Training {dataset} with kernel {kernel_name}, alpha {alpha}", file=sys.stdout, flush=True)
                         result = train_model(args, data=data, test=False)
 
                         results.append((
                             dataset,
-                            n_estimators,
-                            max_depth,
+                            kernel_name,
+                            alpha,
                             result['val_rmse'],
                             result['val_r2'],
                             result['val_accuracy'],
@@ -205,18 +244,16 @@ if __name__ == '__main__':
                     except KeyboardInterrupt:
                         print("Interrupted by user, exiting...", file=sys.stdout, flush=True)
                         exit(0)
-                    # except:
-                    #     print("Failed, skipping...", file=sys.stdout, flush=True)
-                    #     torch.cuda.empty_cache()
-                    #     continue
+                    except Exception as e:
+                        print(f"Failed with error: {e}, skipping...", file=sys.stdout, flush=True)
+                        continue
 
             # Build per-dataset results frame
             df = pd.DataFrame(
                 results,
-                columns=['dataset', 'n_estimators', 'max_depth', 'val_rmse', 'val_r2', 'val_accuracy', 'num_params']
+                columns=['dataset', 'kernel_name', 'alpha', 'val_rmse', 'val_r2', 'val_accuracy', 'num_params']
             )
             df['model_type'] = args.model_type
-            df['learning_rate'] = args.lr
 
             if len(df) == 0:
                 exit(0)
@@ -224,7 +261,7 @@ if __name__ == '__main__':
             df.to_csv(f'./results/{dataset}_ablation_results_{args.model_type}.csv', index=False)
 
         # Aggregate across seeds
-        group_by_cols = ['n_estimators', 'max_depth']
+        group_by_cols = ['kernel_name', 'alpha']
         df_agg = df.groupby(group_by_cols).agg({'val_rmse': 'mean', 'val_accuracy': 'mean'}).reset_index()
 
         if task == 'regression':
@@ -233,8 +270,14 @@ if __name__ == '__main__':
             best_row = df_agg.loc[df_agg['val_accuracy'].idxmax()]
 
         # Reconstruct best setting and evaluate on test set multiple times
-        args.n_estimators = int(best_row['n_estimators'])
-        args.max_depth = int(best_row['max_depth'])
+        best_kernel_name = best_row['kernel_name']
+        best_alpha = best_row['alpha']
+
+        # Find the corresponding kernel object
+        best_kernel_idx = kernel_names.index(best_kernel_name)
+        args.kernel = kernels[best_kernel_idx]
+        args.kernel_name = best_kernel_name
+        args.alpha = best_alpha
 
         # Run 5 test runs with different seeds
         test_seeds = [1337, 2024, 3141, 4242, 5555]
@@ -246,7 +289,7 @@ if __name__ == '__main__':
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             with open(f'./results/test_results_{args.model_type}.csv', 'a+') as f:
                 f.write(
-                    f"{timestamp},{args.model_type},{dataset},{args.n_estimators},"
-                    f"{args.max_depth},{result['test_rmse']},{result['test_r2']},"
+                    f"{timestamp},{args.model_type},{dataset},{best_kernel_name},"
+                    f"{best_alpha},{result['test_rmse']},{result['test_r2']},"
                     f"{result['test_accuracy']},{result['num_params']},{result['converged_epoch']}\n"
                 )

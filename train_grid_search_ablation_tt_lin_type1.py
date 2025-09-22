@@ -8,29 +8,32 @@ import pandas as pd
 import numpy as np
 
 datasets = [
-  ('adult', 2, 'classification'),
-  ('iris', 53, 'classification'),
-  ('hearth', 45, 'classification'),
-  ('winequalityc', 186, 'classification'),
-  ('breast', 17, 'classification'),
-  ('bank', 222, 'classification'),
-  ('wine', 109, 'classification'),
-  ('car_evaluation', 19, 'classification'),
-  ('student_dropout', 697, 'classification'),
-  ('mushrooms', 73, 'classification'),
-  ('student_perf', 320, 'regression'),
-  ('abalone', 1, 'regression'),
-  ('obesity', 544, 'regression'),
-  ('bike', 275, 'regression'),
-  ('realstate', 477, 'regression'),
-  ('energy_efficiency', 242, 'regression'),
-  ('concrete', 165, 'regression'),
-  ('ai4i', 601, 'regression'),
-  ('appliances', 374, 'regression'),
-  ('popularity', 332, 'regression'),
+    ('iris', 53, 'classification'),            # 150
+    ('wine', 109, 'classification'),           # 178
+    ('hearth', 45, 'classification'),          # 303
+    ('realstate', 477, 'regression'),          # 414
+    ('breast', 17, 'classification'),          # 569
+    ('student_perf', 320, 'regression'),       # 649
+    ('energy_efficiency', 242, 'regression'),  # 768
+    ('concrete', 165, 'regression'),           # 1030
+    ('car_evaluation', 19, 'classification'),  # 1728
+    ('obesity', 544, 'regression'),            # 2111
+    ('abalone', 1, 'regression'),              # 4177
+    ('student_dropout', 697, 'classification'),# 4424
+    ('winequalityc', 186, 'classification'),   # 6497
+    ('mushrooms', 73, 'classification'),       # 8124
+    ('ai4i', 601, 'regression'),               # 10000
+    ('bike', 275, 'regression'),               # 17379
+    ('appliances', 374, 'regression'),         # 19735
+    ('popularity', 332, 'regression'),         # 39644
+    ('bank', 222, 'classification'),           # 45211
+    ('adult', 2, 'classification'),            # 48842
+    ('seoulBike', 560, 'regression'),
 ]
 
 if __name__ == '__main__':
+    skip_grid_search = True  # Set to True to skip grid search and load from CSV
+
     args = DotDict()
     args.device = 'cuda'
     args.data_device = 'cuda'
@@ -53,41 +56,48 @@ if __name__ == '__main__':
     seeds = list(range(42, 42+5))
 
     for dataset, dataset_id, task in datasets:
-        results = []
         data = get_ucidata(dataset_id, task, args.data_device)
         num_features = data[0].shape[1]
         args.task = task
-        for N in Ns:
-            for r in rs:
-                for lin_dim in lin_dims:
-                    if num_features > 50 and r > 10:
-                        continue
-                    for seed in seeds:
-                        try:
-                            args.N = N
-                            args.r = r
-                            args.lin_dim = lin_dim
-                            args.seed = seed
-                            print(f"Training {dataset} with N={args.N}, r={r}, lin_dim={lin_dim}")
-                            result = train_model(args, data=data, test=False)
-                            results.append((dataset, args.N, args.r, args.lin_dim, result['val_rmse'], result['val_r2'], result['val_accuracy'], result['num_params'], result['converged_epoch'], args.seed))
-                            print(f"Result: {result}")
-                        except:
-                            print("Failed, skipping...")
-                            torch.cuda.empty_cache()
+
+        if skip_grid_search:
+            # Load existing results from CSV
+            df = pd.read_csv(f'./results/{dataset}_ablation_results_{args.model_type}.csv')
+            print(f"Loaded existing results for {dataset}")
+        else:
+            # Perform grid search
+            results = []
+            for N in Ns:
+                for r in rs:
+                    for lin_dim in lin_dims:
+                        if num_features > 50 and r > 10:
                             continue
-    
-        df = pd.DataFrame(results, columns=['dataset', 'N', 'r', 'lin_dim', 'val_rmse', 'val_r2', 'val_accuracy', 'num_params', 'converged_epoch', 'seed'])
-        df['num_swipes'] = args.num_swipes
-        df['eps_start'] = args.eps_start
-        df['eps_decay'] = args.eps_decay
-        df['early_stopping'] = args.early_stopping
-        df['model_type'] = args.model_type
+                        for seed in seeds:
+                            try:
+                                args.N = N
+                                args.r = r
+                                args.lin_dim = lin_dim
+                                args.seed = seed
+                                print(f"Training {dataset} with N={args.N}, r={r}, lin_dim={lin_dim}")
+                                result = train_model(args, data=data, test=False)
+                                results.append((dataset, args.N, args.r, args.lin_dim, result['val_rmse'], result['val_r2'], result['val_accuracy'], result['num_params'], result['converged_epoch'], args.seed))
+                                print(f"Result: {result}")
+                            except:
+                                print("Failed, skipping...")
+                                torch.cuda.empty_cache()
+                                continue
 
-        if len(df) == 0:
-            exit(0)
+            df = pd.DataFrame(results, columns=['dataset', 'N', 'r', 'lin_dim', 'val_rmse', 'val_r2', 'val_accuracy', 'num_params', 'converged_epoch', 'seed'])
+            df['num_swipes'] = args.num_swipes
+            df['eps_start'] = args.eps_start
+            df['eps_decay'] = args.eps_decay
+            df['early_stopping'] = args.early_stopping
+            df['model_type'] = args.model_type
 
-        df.to_csv(f'./results/{dataset}_ablation_results_{args.model_type}.csv', index=False)
+            if len(df) == 0:
+                exit(0)
+
+            df.to_csv(f'./results/{dataset}_ablation_results_{args.model_type}.csv', index=False)
 
         # Take the best one and run it on the test set
         # First we aggregate over seeds to find the best (N, r) pair
@@ -101,11 +111,14 @@ if __name__ == '__main__':
         args.r = int(best_row['r'])
         args.lin_dim = float(best_row['lin_dim'])
         
-        args.seed = 1337  # Fixed seed for final evaluation
-        print(f"Final evaluation on test set for {dataset} with N={args.N}, r={args.r}")
-        result = train_model(args, data=data, test=True)
-        print(f"Final Result: {result}")
-        
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        with open(f'./results/test_results_{args.model_type}.csv', 'a+') as f:
-            f.write(f"{timestamp},{args.model_type},{dataset},{args.N},{args.r},{args.lin_dim},{result['test_rmse']},{result['test_r2']},{result['test_accuracy']},{result['num_params']},{result['converged_epoch']}\n")
+        # Run 5 test runs with different seeds
+        test_seeds = [1337, 2024, 3141, 4242, 5555]
+        for test_seed in test_seeds:
+            args.seed = test_seed
+            print(f"Final evaluation on test set for {dataset} with N={args.N}, r={args.r}, lin_dim={args.lin_dim}, seed {test_seed}")
+            result = train_model(args, data=data, test=True)
+            print(f"Final Result: {result}")
+
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            with open(f'./results/test_results_{args.model_type}.csv', 'a+') as f:
+                f.write(f"{timestamp},{args.model_type},{dataset},{args.N},{args.r},{args.lin_dim},{result['test_rmse']},{result['test_r2']},{result['test_accuracy']},{result['num_params']},{result['converged_epoch']}\n")

@@ -82,8 +82,8 @@ for p, m in zip(paths, models):
 df_cpd_combined = pd.concat(df_list, ignore_index=True)
 #%%
 #%%
-paths = ["./results/test_results_mlp.csv", "./results/test_results_tnml_polynomial.csv", "./results/test_results_tnml_sin-cos.csv", "./results/test_results_xgboost.csv"]
-models = ['mlp', 'tnml_polynomial', 'tnml_sin-cos', 'xgboost']
+paths = ["./results/test_results_mlp.csv", "./results/test_results_tnml_polynomial.csv", "./results/test_results_tnml_sin-cos.csv", "./results/test_results_xgboost.csv", "./results/test_results_gp.csv"]
+models = ['mlp', 'tnml_polynomial', 'tnml_sin-cos', 'xgboost', 'gp']
 # tnml csv header creater:
 # f"{timestamp},{args.model_type},{dataset},{args.N},{args.r},{np.nan},{result['test_rmse']},{result['test_r2']},{result['test_accuracy']},{result['num_params']},{result['converged_epoch']}\n"
 # xgboost csv header creater:
@@ -98,7 +98,8 @@ models = ['mlp', 'tnml_polynomial', 'tnml_sin-cos', 'xgboost']
 tnml_cols = ["timestamp","model_type","dataset","N","r","lin_dim","test_rmse","test_r2","test_accuracy","num_params","converged_epoch"]
 xgboost_cols = ["timestamp","model_type","dataset","n_estimators","max_depth","test_rmse","test_r2","test_accuracy","num_params","converged_epoch"]
 mlp_cols = ["timestamp","model_type","dataset","num_layers","num_channels","test_rmse","test_r2","test_accuracy","num_params","converged_epoch"]
-col_names_list = [mlp_cols, tnml_cols, tnml_cols, xgboost_cols]
+gp_cols = ["timestamp","model_type","dataset","best_kernel_name","best_alpha","test_rmse","test_r2","test_accuracy","num_params","converged_epoch"]
+col_names_list = [mlp_cols, tnml_cols, tnml_cols, xgboost_cols, gp_cols]
 
 df_list = []
 for p, m, cols in zip(paths, models, col_names_list):
@@ -117,7 +118,7 @@ pivot = combined.pivot(
     values="metric"       # cell values
 )
 # Sort rows in this order:
-row_order = ['tt', 'cpd', 'cpd_type1', 'cpd_sym', 'cpd_sym_type1', 'tnml_polynomial', 'tnml_sin-cos', 'mlp', 'xgboost']
+row_order = ['tt', 'cpd', 'cpd_type1', 'cpd_sym', 'cpd_sym_type1', 'tnml_polynomial', 'tnml_sin-cos', 'gp', 'mlp', 'xgboost']
 pivot = pivot.reindex(row_order)
 # Sort columns alphabetically
 pivot = pivot.reindex(sorted(pivot.columns), axis=1)
