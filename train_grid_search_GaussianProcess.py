@@ -23,28 +23,27 @@ def error_rate_torch(y_true, y_pred):
     return 1.0 - accuracy_score(y_true_labels, y_pred_labels)
 
 datasets = [
-  # ('iris', 53, 'classification'),            # 150
-  # ('wine', 109, 'classification'),           # 178
-  # ('hearth', 45, 'classification'),          # 303
-  # ('realstate', 477, 'regression'),          # 414
-  # ('breast', 17, 'classification'),          # 569
-  # ('student_perf', 320, 'regression'),       # 649
-  # ('energy_efficiency', 242, 'regression'),  # 768
-  # ('concrete', 165, 'regression'),           # 1030
-  # ('car_evaluation', 19, 'classification'),  # 1728
-  # ('obesity', 544, 'regression'),            # 2111
-  # ('abalone', 1, 'regression'),              # 4177
-  # ('student_dropout', 697, 'classification'),# 4424
-  # ('winequalityc', 186, 'classification'),   # 6497
-  # ('mushrooms', 73, 'classification'),       # 8124
-  # ('ai4i', 601, 'regression'),               # 10000
-  # ('bike', 275, 'regression'),               # 17379
-  # ('appliances', 374, 'regression'),         # 19735
-  # ('popularity', 332, 'regression'),         # 39644
-  # ('bank', 222, 'classification'),           # 45211
-  # ('adult', 2, 'classification'),            # 48842
-  # ('airQuality', 360, 'regression'),
-  ('seoulBike', 560, 'regression'),
+    ('iris', 53, 'classification'),            # 150
+    ('wine', 109, 'classification'),           # 178
+    ('hearth', 45, 'classification'),          # 303
+    ('realstate', 477, 'regression'),          # 414
+    ('breast', 17, 'classification'),          # 569
+    ('student_perf', 320, 'regression'),       # 649
+    ('energy_efficiency', 242, 'regression'),  # 768
+    ('concrete', 165, 'regression'),           # 1030
+    ('car_evaluation', 19, 'classification'),  # 1728
+    ('obesity', 544, 'regression'),            # 2111
+    ('abalone', 1, 'regression'),              # 4177
+    ('student_dropout', 697, 'classification'),# 4424
+    ('winequalityc', 186, 'classification'),   # 6497
+    ('mushrooms', 73, 'classification'),       # 8124
+    ('ai4i', 601, 'regression'),               # 10000
+    ('bike', 275, 'regression'),               # 17379
+    ('appliances', 374, 'regression'),         # 19735
+    ('popularity', 332, 'regression'),         # 39644
+    ('bank', 222, 'classification'),           # 45211
+    ('adult', 2, 'classification'),            # 48842
+    ('seoulBike', 560, 'regression'),
 ]
 
 
@@ -149,6 +148,8 @@ def train_model(args, data=None, test=False):
     return report_dict
 
 if __name__ == '__main__':
+    skip_grid_search = True  # Set to True to skip grid search and load from CSV
+
     args = DotDict()
     args.device = 'cuda'
     args.data_device = 'cuda'
@@ -202,7 +203,6 @@ if __name__ == '__main__':
     seeds = list(range(42, 42 + 5))
 
     for dataset, dataset_id, task in datasets:
-        results = []
         data = get_ucidata(dataset_id, task, args.data_device)
         X_train, y_train, X_val, y_val, X_test, y_test = data
         n_features = X_train.shape[1]
@@ -213,45 +213,52 @@ if __name__ == '__main__':
         # Create kernels based on the number of features
         kernels, kernel_names = create_kernels(n_features)
 
-        for kernel, kernel_name in zip(kernels, kernel_names):
-            for alpha in alphas:
-                try:
-                    args.kernel = kernel
-                    args.kernel_name = kernel_name
-                    args.alpha = alpha
+        if skip_grid_search:
+            # Load existing results from CSV
+            df = pd.read_csv(f'./results/{dataset}_ablation_results_{args.model_type}.csv')
+            print(f"Loaded existing results for {dataset}", file=sys.stdout, flush=True)
+        else:
+            # Perform grid search
+            results = []
+            for kernel, kernel_name in zip(kernels, kernel_names):
+                for alpha in alphas:
+                    try:
+                        args.kernel = kernel
+                        args.kernel_name = kernel_name
+                        args.alpha = alpha
 
-                    print(f"Training {dataset} with kernel {kernel_name}, alpha {alpha}", file=sys.stdout, flush=True)
-                    result = train_model(args, data=data, test=False)
+                        print(f"Training {dataset} with kernel {kernel_name}, alpha {alpha}", file=sys.stdout, flush=True)
+                        result = train_model(args, data=data, test=False)
 
-                    results.append((
-                        dataset,
-                        kernel_name,
-                        alpha,
-                        result['val_rmse'],
-                        result['val_r2'],
-                        result['val_accuracy'],
-                        result['num_params']
-                    ))
+                        results.append((
+                            dataset,
+                            kernel_name,
+                            alpha,
+                            result['val_rmse'],
+                            result['val_r2'],
+                            result['val_accuracy'],
+                            result['num_params']
+                        ))
 
-                    print(f"Result: {result}", file=sys.stdout, flush=True)
-                except KeyboardInterrupt:
-                    print("Interrupted by user, exiting...", file=sys.stdout, flush=True)
-                    exit(0)
-                except Exception as e:
-                    print(f"Failed with error: {e}, skipping...", file=sys.stdout, flush=True)
-                    continue
+                        print(f"Result: {result}", file=sys.stdout, flush=True)
+                    except KeyboardInterrupt:
+                        print("Interrupted by user, exiting...", file=sys.stdout, flush=True)
+                        exit(0)
+                    except Exception as e:
+                        print(f"Failed with error: {e}, skipping...", file=sys.stdout, flush=True)
+                        continue
 
-        # Build per-dataset results frame
-        df = pd.DataFrame(
-            results,
-            columns=['dataset', 'kernel_name', 'alpha', 'val_rmse', 'val_r2', 'val_accuracy', 'num_params']
-        )
-        df['model_type'] = args.model_type
+            # Build per-dataset results frame
+            df = pd.DataFrame(
+                results,
+                columns=['dataset', 'kernel_name', 'alpha', 'val_rmse', 'val_r2', 'val_accuracy', 'num_params']
+            )
+            df['model_type'] = args.model_type
 
-        if len(df) == 0:
-            exit(0)
+            if len(df) == 0:
+                exit(0)
 
-        df.to_csv(f'./results/{dataset}_ablation_results_{args.model_type}.csv', index=False)
+            df.to_csv(f'./results/{dataset}_ablation_results_{args.model_type}.csv', index=False)
 
         # Aggregate across seeds
         group_by_cols = ['kernel_name', 'alpha']
@@ -262,7 +269,7 @@ if __name__ == '__main__':
         else:
             best_row = df_agg.loc[df_agg['val_accuracy'].idxmax()]
 
-        # Reconstruct best setting and evaluate on test set
+        # Reconstruct best setting and evaluate on test set multiple times
         best_kernel_name = best_row['kernel_name']
         best_alpha = best_row['alpha']
 
@@ -272,14 +279,17 @@ if __name__ == '__main__':
         args.kernel_name = best_kernel_name
         args.alpha = best_alpha
 
-        print(f"Final evaluation on test set for {dataset}", file=sys.stdout, flush=True)
-        result = train_model(args, data=data, test=True)
-        print(f"Final Result: {result}", file=sys.stdout, flush=True)
+        # Run 5 test runs with different seeds
+        test_seeds = [1337, 2024, 3141, 4242, 5555]
+        for test_seed in test_seeds:
+            print(f"Final evaluation on test set for {dataset} with seed {test_seed}", file=sys.stdout, flush=True)
+            result = train_model(args, data=data, test=True)
+            print(f"Final Result: {result}", file=sys.stdout, flush=True)
 
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        with open(f'./results/test_results_{args.model_type}.csv', 'a+') as f:
-            f.write(
-                f"{timestamp},{args.model_type},{dataset},{best_kernel_name},"
-                f"{best_alpha},{result['test_rmse']},{result['test_r2']},"
-                f"{result['test_accuracy']},{result['num_params']},{result['converged_epoch']}\n"
-            )
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            with open(f'./results/test_results_{args.model_type}.csv', 'a+') as f:
+                f.write(
+                    f"{timestamp},{args.model_type},{dataset},{best_kernel_name},"
+                    f"{best_alpha},{result['test_rmse']},{result['test_r2']},"
+                    f"{result['test_accuracy']},{result['num_params']},{result['converged_epoch']}\n"
+                )
