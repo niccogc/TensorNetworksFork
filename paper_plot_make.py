@@ -1,7 +1,9 @@
 #%%
 import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+import numpy as np
 
-# Load all again
 parameters = [
     {'degree': 3, 'max_degree': 8, 'd': 1, 'rank': 6, 'cpd_rank': 100},
     {'degree': 3, 'max_degree': 8, 'd': 3, 'rank': 12, 'cpd_rank': 100},
@@ -14,10 +16,6 @@ all_dfs = []
 for params in parameters:
     df = pd.read_csv(f"results_d{params['d']}_deg{params['degree']}_rank{params['rank']}_cpdrank{params['cpd_rank']}.csv")
     all_dfs.append(df)
-
-#%%
-import seaborn as sns
-import matplotlib.pyplot as plt
 for params, df in zip(parameters, all_dfs):
     plt.figure(figsize=(8, 6))
     sns.color_palette("tab10")
@@ -37,10 +35,7 @@ for params, df in zip(parameters, all_dfs):
     plt.xlabel("Degree")
     plt.ylabel("Validation Loss")
     plt.tight_layout()
-    plt.show()
-#%%
-import seaborn as sns
-import matplotlib.pyplot as plt
+    # plt.savefig('AFIG0.png')
 for params, df in zip(parameters, all_dfs):
     df_N = df[df['N'] == df['N'].max()]
     plt.figure(figsize=(8, 6))
@@ -55,11 +50,7 @@ for params, df in zip(parameters, all_dfs):
     plt.ylabel("Time (seconds)")
     #Set y axis to log scale
     plt.tight_layout()
-    plt.show()
-# %%
-import seaborn as sns
-import matplotlib.pyplot as plt
-import numpy as np
+    # plt.savefig('AFIG1.png')
 for params, df in zip(parameters, all_dfs):
     df_N = df[df['N'] == df['N'].max()].copy()
     df_N['degree_diff'] = np.abs(df_N['best_degree'] - params['degree'])
@@ -70,5 +61,5 @@ for params, df in zip(parameters, all_dfs):
         y="degree_diff",
     )
     plt.tight_layout()
-    plt.show()
-# %%
+    # plt.savefig('AFIG2.png')
+print(all_dfs[0]['name'].unique())
