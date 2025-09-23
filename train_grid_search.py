@@ -33,7 +33,7 @@ def evaluate_model(model, X, y_true, metric='accuracy'):
 
 def train_model(args, data=None, test=False):
     if data is None:
-        data = get_ucidata(args.dataset_id, args.task, device=args.data_device)
+        data = get_ucidata(args.dataset_id, args.task, args.data_device)
     X_train, y_train, X_val, y_val, X_test, y_test = data
 
     # For each y, if it is not 2D, add a dimension
@@ -125,8 +125,8 @@ def train_model(args, data=None, test=False):
     
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Tensor Network Training for Tabular Data')
-    parser.add_argument('--data_dir', type=str, default='', help='Directory for data files')
-    parser.add_argument('--dataset_name', type=str, required=True, help='Name of the dataset (without .pt extension)')
+    parser.add_argument('--dataset_id', type=int, required=True, help='UCI dataset ID to load')
+    parser.add_argument('--dataset_name', type=str, required=True, help='Name of the dataset (for saving results)')
     parser.add_argument('--device', type=str, default='cuda')
     parser.add_argument('--data_device', type=str, default='cuda', choices=['cpu', 'cuda'], help='Device to store the dataset (cpu or cuda)')
     parser.add_argument('--model_type', type=str, default='tt', required=True, help='Type of model to train: tt, cpd, _type1, etc.')
@@ -148,6 +148,5 @@ if __name__ == '__main__':
     parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
 
     args = parser.parse_args()
-    args.path = os.path.join(args.data_dir, args.dataset_name + '_tensor.pt')
     result = train_model(args)  # loads data inside main by default
     print(result)
