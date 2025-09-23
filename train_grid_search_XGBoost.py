@@ -22,26 +22,27 @@ def error_rate_torch(y_true, y_pred):
     return 1.0 - accuracy_score(y_true_labels, y_pred_labels)
 
 datasets = [
-  ('iris', 53, 'classification'),
-  ('adult', 2, 'classification'),
-  ('hearth', 45, 'classification'),
-  ('winequalityc', 186, 'classification'),
-  ('breast', 17, 'classification'),
-  ('bank', 222, 'classification'),
-  ('wine', 109, 'classification'),
-  ('car_evaluation', 19, 'classification'),
-  ('student_dropout', 697, 'classification'),
-  ('mushrooms', 73, 'classification'),
-  ('student_perf', 320, 'regression'),
-  ('abalone', 1, 'regression'),
-  ('obesity', 544, 'regression'),
-  ('bike', 275, 'regression'),
-  ('realstate', 477, 'regression'),
-  ('energy_efficiency', 242, 'regression'),
-  ('concrete', 165, 'regression'),
-  ('ai4i', 601, 'regression'),
-  ('appliances', 374, 'regression'),
-  ('popularity', 332, 'regression'),
+    ('iris', 53, 'classification'),
+    ('adult', 2, 'classification'),
+    ('hearth', 45, 'classification'),
+    ('winequalityc', 186, 'classification'),
+    ('breast', 17, 'classification'),
+    ('bank', 222, 'classification'),
+    ('wine', 109, 'classification'),
+    ('car_evaluation', 19, 'classification'),
+    ('student_dropout', 697, 'classification'),
+    ('mushrooms', 73, 'classification'),
+    ('student_perf', 320, 'regression'),
+    ('abalone', 1, 'regression'),
+    ('obesity', 544, 'regression'),
+    ('bike', 275, 'regression'),
+    ('realstate', 477, 'regression'),
+    ('energy_efficiency', 242, 'regression'),
+    ('concrete', 165, 'regression'),
+    ('ai4i', 601, 'regression'),
+    ('appliances', 374, 'regression'),
+    ('popularity', 332, 'regression'),
+    ('seoulBike', 560, 'regression'),
 ]
 
 
@@ -155,6 +156,8 @@ def train_model(args, data=None, test=False):
     return report_dict
 
 if __name__ == '__main__':
+    skip_grid_search = True  # Set to True to skip grid search and load from CSV
+
     args = DotDict()
     args.device = 'cuda'
     args.data_device = 'cuda'
@@ -169,51 +172,56 @@ if __name__ == '__main__':
     seeds = list(range(42, 42 + 5))
 
     for dataset, dataset_id, task in datasets:
-        results = []
         data = get_ucidata(dataset_id, task, args.data_device)
-
         args.task = task
 
-        for n_estimators in n_estimatorss:
-            for max_depth in max_depths:
-                try:
-                    args.n_estimators = n_estimators
-                    args.max_depth = max_depth
+        if skip_grid_search:
+            # Load existing results from CSV
+            df = pd.read_csv(f'./results/{dataset}_ablation_results_{args.model_type}.csv')
+            print(f"Loaded existing results for {dataset}", file=sys.stdout, flush=True)
+        else:
+            # Perform grid search
+            results = []
+            for n_estimators in n_estimatorss:
+                for max_depth in max_depths:
+                    try:
+                        args.n_estimators = n_estimators
+                        args.max_depth = max_depth
 
-                    print(f"Training {dataset} with n_estimators {n_estimators}, max_depth {max_depth}", file=sys.stdout, flush=True)
-                    result = train_model(args, data=data, test=False)
+                        print(f"Training {dataset} with n_estimators {n_estimators}, max_depth {max_depth}", file=sys.stdout, flush=True)
+                        result = train_model(args, data=data, test=False)
 
-                    results.append((
-                        dataset,
-                        n_estimators,
-                        max_depth,
-                        result['val_rmse'],
-                        result['val_r2'],
-                        result['val_accuracy'],
-                        result['num_params']
-                    ))
+                        results.append((
+                            dataset,
+                            n_estimators,
+                            max_depth,
+                            result['val_rmse'],
+                            result['val_r2'],
+                            result['val_accuracy'],
+                            result['num_params']
+                        ))
 
-                    print(f"Result: {result}", file=sys.stdout, flush=True)
-                except KeyboardInterrupt:
-                    print("Interrupted by user, exiting...", file=sys.stdout, flush=True)
-                    exit(0)
-                # except:
-                #     print("Failed, skipping...", file=sys.stdout, flush=True)
-                #     torch.cuda.empty_cache()
-                #     continue
+                        print(f"Result: {result}", file=sys.stdout, flush=True)
+                    except KeyboardInterrupt:
+                        print("Interrupted by user, exiting...", file=sys.stdout, flush=True)
+                        exit(0)
+                    # except:
+                    #     print("Failed, skipping...", file=sys.stdout, flush=True)
+                    #     torch.cuda.empty_cache()
+                    #     continue
 
-        # Build per-dataset results frame
-        df = pd.DataFrame(
-            results,
-            columns=['dataset', 'n_estimators', 'max_depth', 'val_rmse', 'val_r2', 'val_accuracy', 'num_params']
-        )
-        df['model_type'] = args.model_type
-        df['learning_rate'] = args.lr
+            # Build per-dataset results frame
+            df = pd.DataFrame(
+                results,
+                columns=['dataset', 'n_estimators', 'max_depth', 'val_rmse', 'val_r2', 'val_accuracy', 'num_params']
+            )
+            df['model_type'] = args.model_type
+            df['learning_rate'] = args.lr
 
-        if len(df) == 0:
-            exit(0)
+            if len(df) == 0:
+                exit(0)
 
-        df.to_csv(f'./results/{dataset}_ablation_results_{args.model_type}.csv', index=False)
+            df.to_csv(f'./results/{dataset}_ablation_results_{args.model_type}.csv', index=False)
 
         # Aggregate across seeds
         group_by_cols = ['n_estimators', 'max_depth']
@@ -224,18 +232,21 @@ if __name__ == '__main__':
         else:
             best_row = df_agg.loc[df_agg['val_accuracy'].idxmax()]
 
-        # Reconstruct best setting and evaluate on test set
+        # Reconstruct best setting and evaluate on test set multiple times
         args.n_estimators = int(best_row['n_estimators'])
         args.max_depth = int(best_row['max_depth'])
 
-        print(f"Final evaluation on test set for {dataset}", file=sys.stdout, flush=True)
-        result = train_model(args, data=data, test=True)
-        print(f"Final Result: {result}", file=sys.stdout, flush=True)
+        # Run 5 test runs with different seeds
+        test_seeds = [1337, 2024, 3141, 4242, 5555]
+        for test_seed in test_seeds:
+            print(f"Final evaluation on test set for {dataset} with seed {test_seed}", file=sys.stdout, flush=True)
+            result = train_model(args, data=data, test=True)
+            print(f"Final Result: {result}", file=sys.stdout, flush=True)
 
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        with open(f'./results/test_results_{args.model_type}.csv', 'a+') as f:
-            f.write(
-                f"{timestamp},{args.model_type},{dataset},{args.n_estimators},"
-                f"{args.max_depth},{result['test_rmse']},{result['test_r2']},"
-                f"{result['test_accuracy']},{result['num_params']},{result['converged_epoch']}\n"
-            )
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            with open(f'./results/test_results_{args.model_type}.csv', 'a+') as f:
+                f.write(
+                    f"{timestamp},{args.model_type},{dataset},{args.n_estimators},"
+                    f"{args.max_depth},{result['test_rmse']},{result['test_r2']},"
+                    f"{result['test_accuracy']},{result['num_params']},{result['converged_epoch']}\n"
+                )

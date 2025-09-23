@@ -24,7 +24,8 @@ datasets = [
   ('wine', 109, 'classification'),
   ('car_evaluation', 19, 'classification'),
   ('student_dropout', 697, 'classification'),
-  ('mushrooms', 73, 'classification')
+  ('mushrooms', 73, 'classification'),
+  ('seoulBike', 560, 'regression'),
 ]
 
 def one_hot_with_cap(X, cap=100):

@@ -13,26 +13,27 @@ import pandas as pd
 from models.tnml import TNMLRegressor
 
 datasets = [
-  ('adult', 2, 'classification'),
-  ('iris', 53, 'classification'),
-  ('hearth', 45, 'classification'),
-  ('winequalityc', 186, 'classification'),
-  ('breast', 17, 'classification'),
-  ('bank', 222, 'classification'),
-  ('wine', 109, 'classification'),
-  ('car_evaluation', 19, 'classification'),
-  ('student_dropout', 697, 'classification'),
-  ('mushrooms', 73, 'classification'),
-  ('student_perf', 320, 'regression'),
-  ('abalone', 1, 'regression'),
-  ('obesity', 544, 'regression'),
-  ('bike', 275, 'regression'),
-  ('realstate', 477, 'regression'),
-  ('energy_efficiency', 242, 'regression'),
-  ('concrete', 165, 'regression'),
-  ('ai4i', 601, 'regression'),
-  ('appliances', 374, 'regression'),
-  ('popularity', 332, 'regression'),
+    # ('adult', 2, 'classification'),
+    # ('iris', 53, 'classification'),
+    # ('hearth', 45, 'classification'),
+    # ('winequalityc', 186, 'classification'),
+    # ('breast', 17, 'classification'),
+    # ('bank', 222, 'classification'),
+    # ('wine', 109, 'classification'),
+    # ('car_evaluation', 19, 'classification'),
+    # ('student_dropout', 697, 'classification'),
+    # ('mushrooms', 73, 'classification'),
+    # ('student_perf', 320, 'regression'),
+    # ('abalone', 1, 'regression'),
+    # ('obesity', 544, 'regression'),
+    # ('bike', 275, 'regression'),
+    # ('realstate', 477, 'regression'),
+    # ('energy_efficiency', 242, 'regression'),
+    # ('concrete', 165, 'regression'),
+    # ('ai4i', 601, 'regression'),
+    # ('appliances', 374, 'regression'),
+    # ('popularity', 332, 'regression'),
+    ('seoulBike', 560, 'regression'),
 ]
 
 
@@ -149,6 +150,8 @@ def train_model(args, data=None, test=False):
     return report_dict
 
 if __name__ == '__main__':
+    skip_grid_search = True  # Set to True to skip grid search and load from CSV
+
     args = DotDict()
     args.device = 'cuda'
     args.data_device = 'cuda'
@@ -166,47 +169,60 @@ if __name__ == '__main__':
     args.lin_dim = None
 
     seeds = list(range(42, 42+5))
-    for basis_func in ['sin-cos']: #'polynomial'
+    for basis_func in ['polynomial']: #'sin-cos', 
         is_poly = basis_func == 'polynomial'
         degrees = [1,2,3,4,5,6] if is_poly else [np.nan]
         args.model_type = f'tnml_{basis_func}'
         for dataset, dataset_id, task in datasets:
-            results = []
             data = get_ucidata(dataset_id, task, args.data_device)
             num_features = data[0].shape[1]
             args.early_stopping = max(10, num_features+1)
             args.task = task
-            for degree in degrees:
-                for r in rs:
-                    for seed in seeds:
-                        try:
-                            args.N = degree if is_poly else np.nan
-                            args.degree = degree
-                            args.r = r
-                            args.seed = seed
-                            print(f"Training {dataset} with r={r}, basis={basis_func}, degree={degree} and early_stopping={args.early_stopping}", file=sys.stdout, flush=True)
-                            result = train_model(args, data=data, test=False)
-                            results.append((dataset, args.degree, args.r, np.nan, result['val_rmse'], result['val_r2'], result['val_accuracy'], result['num_params'], result['converged_epoch'], seed))
-                            print(f"Result: {result}", file=sys.stdout, flush=True)
-                        except KeyboardInterrupt:
-                            print("Interrupted by user, exiting...", file=sys.stdout, flush=True)
-                            exit(0)
-                        except:
-                            print("Failed, skipping...", file=sys.stdout, flush=True)
-                            torch.cuda.empty_cache()
-                            continue
-        
-            df = pd.DataFrame(results, columns=['dataset', 'N', 'r', 'lin_dim', 'val_rmse', 'val_r2', 'val_accuracy', 'num_params', 'converged_epoch', 'seed'])
-            df['num_swipes'] = args.num_swipes
-            df['eps_start'] = args.eps_start
-            df['eps_decay'] = args.eps_decay
-            df['early_stopping'] = args.early_stopping
-            df['model_type'] = args.model_type
 
-            if len(df) == 0:
-                exit(0)
+            rerun = True
+            if skip_grid_search:
+                # Load existing results from CSV
+                try:
+                    df = pd.read_csv(f'./results/{dataset}_ablation_results_{args.model_type}.csv')
+                    print(f"Loaded existing results for {dataset}", file=sys.stdout, flush=True)
+                    rerun = False
+                except FileNotFoundError:
+                    print(f"No existing results found for {dataset}, running grid search.", file=sys.stdout, flush=True)
+                    rerun = True
+            if rerun:
+                # Perform grid search
+                results = []
+                for degree in degrees:
+                    for r in rs:
+                        for seed in seeds:
+                            try:
+                                args.N = degree if is_poly else np.nan
+                                args.degree = degree
+                                args.r = r
+                                args.seed = seed
+                                print(f"Training {dataset} with r={r}, basis={basis_func}, degree={degree} and early_stopping={args.early_stopping}", file=sys.stdout, flush=True)
+                                result = train_model(args, data=data, test=False)
+                                results.append((dataset, args.degree, args.r, np.nan, result['val_rmse'], result['val_r2'], result['val_accuracy'], result['num_params'], result['converged_epoch'], seed))
+                                print(f"Result: {result}", file=sys.stdout, flush=True)
+                            except KeyboardInterrupt:
+                                print("Interrupted by user, exiting...", file=sys.stdout, flush=True)
+                                exit(0)
+                            except:
+                                print("Failed, skipping...", file=sys.stdout, flush=True)
+                                torch.cuda.empty_cache()
+                                continue
 
-            df.to_csv(f'./results/{dataset}_ablation_results_{args.model_type}.csv', index=False)
+                df = pd.DataFrame(results, columns=['dataset', 'N', 'r', 'lin_dim', 'val_rmse', 'val_r2', 'val_accuracy', 'num_params', 'converged_epoch', 'seed'])
+                df['num_swipes'] = args.num_swipes
+                df['eps_start'] = args.eps_start
+                df['eps_decay'] = args.eps_decay
+                df['early_stopping'] = args.early_stopping
+                df['model_type'] = args.model_type
+
+                if len(df) == 0:
+                    exit(0)
+
+                df.to_csv(f'./results/{dataset}_ablation_results_{args.model_type}.csv', index=False)
 
             # Take the best one and run it on the test set
             # First we aggregate over seeds to find the best (N, r) pair
@@ -222,12 +238,15 @@ if __name__ == '__main__':
                 args.N = int(best_row['N']) if not np.isnan(best_row['N']) else np.nan
                 args.degree = int(best_row['N']) if not np.isnan(best_row['N']) else np.nan
             args.r = int(best_row['r'])
-            
-            args.seed = 1337  # Fixed seed for final evaluation
-            print(f"Final evaluation on test set for {dataset}", file=sys.stdout, flush=True)
-            result = train_model(args, data=data, test=True)
-            print(f"Final Result: {result}", file=sys.stdout, flush=True)
-            
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            with open(f'./results/test_results_{args.model_type}.csv', 'a+') as f:
-                f.write(f"{timestamp},{args.model_type},{dataset},{args.N},{args.r},{np.nan},{result['test_rmse']},{result['test_r2']},{result['test_accuracy']},{result['num_params']},{result['converged_epoch']}\n")
+
+            # Run 5 test runs with different seeds
+            test_seeds = [1337, 2024, 3141, 4242, 5555]
+            for test_seed in test_seeds:
+                args.seed = test_seed
+                print(f"Final evaluation on test set for {dataset} with seed {test_seed}", file=sys.stdout, flush=True)
+                result = train_model(args, data=data, test=True)
+                print(f"Final Result: {result}", file=sys.stdout, flush=True)
+
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                with open(f'./results/test_results_{args.model_type}.csv', 'a+') as f:
+                    f.write(f"{timestamp},{args.model_type},{dataset},{args.N},{args.r},{np.nan},{result['test_rmse']},{result['test_r2']},{result['test_accuracy']},{result['num_params']},{result['converged_epoch']}\n")
