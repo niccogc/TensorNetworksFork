@@ -39,7 +39,7 @@ for params, df in zip(parameters, all_dfs):
     sns.lineplot(
         data=df,
         x="Model Degree",
-        y="loss",
+        y="rmse",
         style="Num samples",
         hue="Model",
         markers=True,
@@ -51,7 +51,7 @@ for params, df in zip(parameters, all_dfs):
     plt.title(f"RMSE for problems with dimension {params['d']} and polynomial degree {params['degree']}")
     plt.ylabel("Validation Loss")
     plt.tight_layout(pad=1.0)
-    plt.savefig(f"figures/ablation_d{params['d']}_deg{params['degree']}_rank{params['rank']}_cpdrank{params['cpd_rank']}.pdf", bbox_inches='tight', pad_inches=0)
+    #plt.savefig(f"figs/ablation_d{params['d']}_deg{params['degree']}_rank{params['rank']}_cpdrank{params['cpd_rank']}.pdf", bbox_inches='tight', pad_inches=0)
 #%%
 import seaborn as sns
 import matplotlib.pyplot as plt

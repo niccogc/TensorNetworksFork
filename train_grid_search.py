@@ -32,6 +32,9 @@ def evaluate_model(model, X, y_true, metric='accuracy'):
         raise ValueError(f"Unknown metric: {metric}")
 
 def train_model(args, data=None, test=False):
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
+    np.random.seed(args.seed)
     if data is None:
         data = get_ucidata(args.dataset_id, args.task, args.data_device)
     X_train, y_train, X_val, y_val, X_test, y_test = data
@@ -147,6 +150,8 @@ if __name__ == '__main__':
     parser.add_argument('--early_stopping', type=int, default=5, help='Early stopping patience for tensor train')
     parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
 
+
     args = parser.parse_args()
+    
     result = train_model(args, test=True)  # loads data inside main by default
     print(result)

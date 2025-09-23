@@ -11,6 +11,12 @@ def root_mean_squared_error_torch(y_true, y_pred):
     y_pred = y_pred.cpu().numpy()
     return root_mean_squared_error(y_true, y_pred)
 
+def unexplained_variance(y_true, y_pred):
+    y_mean = torch.mean(y_true, dim=0, keepdim=True)
+    ss_tot = torch.sum((y_true - y_mean) ** 2, dim=1, keepdim=True)
+    ss_res = torch.sum((y_true - y_pred) ** 2, dim=1, keepdim=True)
+    return (ss_res / ss_tot).mean().item()
+
 from tensor.bregman import SquareBregFunction, AutogradLoss
 from tensor.module import TensorTrainRegressorEarlyStopping, EarlyStopping
 from tensor.layers import CPDLayer, TensorTrainLayer
@@ -310,7 +316,7 @@ def evaluate_cpd(
         X_train, y_train, X_val, y_val,
         model_predict=lambda X: None, #cpd,
         get_model_weights=lambda: None, #lambda: cpd.node_states(),
-        loss_fn=root_mean_squared_error_torch,
+        loss_fn=unexplained_variance,
         abs_err=1e-6,
         rel_err=1e-4,
         early_stopping=early_stopping,
@@ -411,7 +417,7 @@ def evaluate_tt_full(
         X_train, y_train, X_val, y_val,
         model_predict=lambda X: None, #cpd,
         get_model_weights=lambda: None, #lambda: cpd.node_states(),
-        loss_fn=root_mean_squared_error_torch,
+        loss_fn=unexplained_variance,
         abs_err=1e-6,
         rel_err=1e-4,
         early_stopping=early_stopping,
@@ -597,9 +603,9 @@ if __name__ == "__main__":
         return df
 
     parameters = [
-        # {'degree': 3, 'max_degree': 8, 'd': 1, 'rank': 6, 'cpd_rank': 100},
-        # {'degree': 3, 'max_degree': 8, 'd': 3, 'rank': 12, 'cpd_rank': 100},
-        # {'degree': 3, 'max_degree': 8, 'd': 7, 'rank': 24, 'cpd_rank': 100},
+        {'degree': 3, 'max_degree': 8, 'd': 1, 'rank': 6, 'cpd_rank': 100},
+        {'degree': 3, 'max_degree': 8, 'd': 3, 'rank': 12, 'cpd_rank': 100},
+        {'degree': 3, 'max_degree': 8, 'd': 7, 'rank': 24, 'cpd_rank': 100},
         {'degree': 5, 'max_degree': 10, 'd': 1, 'rank': 12, 'cpd_rank': 100},
         {'degree': 5, 'max_degree': 10, 'd': 3, 'rank': 24, 'cpd_rank': 100},
         {'degree': 5, 'max_degree': 10, 'd': 7, 'rank': 38, 'cpd_rank': 100},
