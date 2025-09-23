@@ -1,15 +1,3 @@
-20250916_160808,gp,iris,Matern25,1e-06,nan,nan,1.0,nan,nan
-20250916_160826,gp,wine,Matern25_ARD,1e-06,nan,nan,0.9629629629629629,nan,nan
-20250916_160918,gp,hearth,Matern25_WhiteKernel,1e-06,nan,nan,0.5869565217391305,nan,nan
-20250916_160923,gp,realstate,RBF_ARD_plus_DotProduct_WhiteKernel,1e-06,6.955392103166007,0.7099000272338558,nan,nan,nan
-20250916_161139,gp,breast,DotProduct,1e-06,nan,nan,0.9767441860465116,nan,nan
-20250916_161349,gp,student_perf,RBF_WhiteKernel,1e-06,2.8101920333569734,0.21970669079475103,nan,nan,nan
-20250916_161419,gp,energy_efficiency,Matern25_ARD,1e-06,0.45352390678171733,0.9979001704503814,nan,nan,nan
-20250916_161449,gp,concrete,RBF_plus_DotProduct_WhiteKernel,1e-06,5.945676308400231,0.8587538369874564,nan,nan,nan
-20250916_165258,gp,car_evaluation,RBF_ARD_plus_DotProduct,1e-06,nan,nan,0.9653846153846154,nan,nan
-20250916_180422,gp,obesity,Matern25_ARD_WhiteKernel,1e-06,0.4801626747620394,0.9421947070797297,nan,nan,nan
-20250916_183347,gp,abalone,RBF_ARD_WhiteKernel,1e-06,2.0162222249805595,0.6039599897120964,nan,nan,nan
-20250917_062817,gp,student_dropout,RBF_ARD_plus_DotProduct,1e-06,nan,nan,0.7831325301204819,nan,nan
 20250922_150347,gp,iris,Matern25,1e-06,nan,nan,1.0,nan,nan
 20250922_150347,gp,iris,Matern25,1e-06,nan,nan,1.0,nan,nan
 20250922_150348,gp,iris,Matern25,1e-06,nan,nan,1.0,nan,nan
