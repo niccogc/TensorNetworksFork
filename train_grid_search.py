@@ -148,5 +148,5 @@ if __name__ == '__main__':
     parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
 
     args = parser.parse_args()
-    result = train_model(args)  # loads data inside main by default
+    result = train_model(args, test=True)  # loads data inside main by default
     print(result)
