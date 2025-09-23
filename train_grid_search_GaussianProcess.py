@@ -43,7 +43,7 @@ datasets = [
     ('popularity', 332, 'regression'),         # 39644
     ('bank', 222, 'classification'),           # 45211
     ('adult', 2, 'classification'),            # 48842
-    ('seoulBike', 560, 'regression'),
+    ('seoulBike', 560, 'regression'),          
 ]
 
 
@@ -211,13 +211,28 @@ if __name__ == '__main__':
         args.dataset_id = dataset_id
 
         # Create kernels based on the number of features
-        kernels, kernel_names = create_kernels(n_features)
-
-        if skip_grid_search:
-            # Load existing results from CSV
-            df = pd.read_csv(f'./results/{dataset}_ablation_results_{args.model_type}.csv')
-            print(f"Loaded existing results for {dataset}", file=sys.stdout, flush=True)
+        # If less than 4000 samples then create all kernels:
+        if X_train.shape[0] < 4000:
+            kernels, kernel_names = create_kernels(n_features)
+            print(f"Using full kernel set for dataset with {X_train.shape[0]} samples.", file=sys.stdout, flush=True)
         else:
+            # Use only RBF with ARD + DotProduct + WhiteKernel
+            kernels = [C(1.0) * RBF(length_scale=[1.0] * n_features) + DotProduct() + WhiteKernel()]
+            kernel_names = ['RBF_ARD_plus_DotProduct_WhiteKernel']
+            print("Using reduced kernel set due to large dataset size.", file=sys.stdout, flush=True)
+        
+
+        rerun = True
+        if skip_grid_search:
+            try:
+                # Load existing results from CSV
+                df = pd.read_csv(f'./results/{dataset}_ablation_results_{args.model_type}.csv')
+                print(f"Loaded existing results for {dataset}", file=sys.stdout, flush=True)
+                rerun = False
+            except FileNotFoundError:
+                rerun = True
+                
+        if rerun:
             # Perform grid search
             results = []
             for kernel, kernel_name in zip(kernels, kernel_names):
