@@ -330,22 +330,110 @@ column_order = [
     'iris', 'hearth', 'winequalityc', 'breast', 'adult', 'bank', 'wine', 'car_evaluation', 'student_dropout', 'mushrooms'
 ]
 pivot = pivot.reindex(columns=column_order)
-#%% Split into regression and classification tables
-regression_pivot = pivot[[
+#%% Split into regression and classification tables and add average columns
+regression_datasets = [
     'student_perf', 'abalone', 'obesity', 'bike', 'realstate', 'energy_efficiency', 'concrete', 'ai4i', 'popularity', 'seoulBike'
-]]
+]
+classification_datasets = [
+    'iris', 'hearth', 'winequalityc', 'breast', 'adult', 'bank', 'wine', 'car_evaluation', 'student_dropout', 'mushrooms'
+]
+
+regression_pivot = pivot[regression_datasets].copy()
+classification_pivot = pivot[classification_datasets].copy()
+
+# Calculate averages for regression table and find best/second best
+regression_avg_values = {}
+for model in model_order:
+    if model in pivot_mean.index:
+        # Get mean values for regression datasets only
+        reg_values = []
+        for dataset in regression_datasets:
+            if dataset in pivot_mean.columns:
+                val = pivot_mean.loc[model, dataset]
+                if not pd.isna(val):
+                    reg_values.append(val)
+
+        if reg_values:
+            avg_val = np.mean(reg_values)
+            regression_avg_values[model] = avg_val
+
+# Find best and second best for regression averages
+reg_sorted = sorted(regression_avg_values.items(), key=lambda x: x[1], reverse=True)
+reg_best = reg_sorted[0][0] if len(reg_sorted) > 0 else None
+reg_second_best = reg_sorted[1][0] if len(reg_sorted) > 1 else None
+
+# Format regression averages
+regression_averages = []
+for model in model_order:
+    if model in pivot_mean.index:
+        if model in regression_avg_values:
+            avg_val = regression_avg_values[model]
+            formatted_val = f"{avg_val:.2f}"
+            if model == reg_best:
+                formatted_val = f"\\textbf{{{formatted_val}}}"
+            elif model == reg_second_best:
+                formatted_val = f"\\underline{{{formatted_val}}}"
+            regression_averages.append(formatted_val)
+        else:
+            regression_averages.append("NA")
+
+        # Add SEM row (empty for average column)
+        regression_averages.append("")
+
+# Calculate averages for classification table and find best/second best
+classification_avg_values = {}
+for model in model_order:
+    if model in pivot_mean.index:
+        # Get mean values for classification datasets only
+        class_values = []
+        for dataset in classification_datasets:
+            if dataset in pivot_mean.columns:
+                val = pivot_mean.loc[model, dataset]
+                if not pd.isna(val):
+                    class_values.append(val)
+
+        if class_values:
+            avg_val = np.mean(class_values)
+            classification_avg_values[model] = avg_val
+
+# Find best and second best for classification averages
+class_sorted = sorted(classification_avg_values.items(), key=lambda x: x[1], reverse=True)
+class_best = class_sorted[0][0] if len(class_sorted) > 0 else None
+class_second_best = class_sorted[1][0] if len(class_sorted) > 1 else None
+
+# Format classification averages
+classification_averages = []
+for model in model_order:
+    if model in pivot_mean.index:
+        if model in classification_avg_values:
+            avg_val = classification_avg_values[model]
+            formatted_val = f"{avg_val:.2f}"
+            if model == class_best:
+                formatted_val = f"\\textbf{{{formatted_val}}}"
+            elif model == class_second_best:
+                formatted_val = f"\\underline{{{formatted_val}}}"
+            classification_averages.append(formatted_val)
+        else:
+            classification_averages.append("NA")
+
+        # Add SEM row (empty for average column)
+        classification_averages.append("")
+
+# Add average columns to the pivots
+regression_pivot['Average'] = regression_averages
+classification_pivot['Average'] = classification_averages
 
 # Convert to LaTeX table (no float format since we have formatted strings)
 latex_table = regression_pivot.to_latex(na_rep="NA", caption="Model Performance Comparison", label="tab:model_performance", bold_rows=True, escape=False)
 print(latex_table.replace("_", " "))
-classification_pivot = pivot[[
-    'iris', 'hearth', 'winequalityc', 'breast', 'adult', 'bank', 'wine', 'car_evaluation', 'student_dropout', 'mushrooms'
-]]
 # Convert to LaTeX table (no float format since we have formatted strings)
 latex_table = classification_pivot.to_latex(na_rep="NA", caption="Model Performance Comparison", label="tab:model_performance", bold_rows=True, escape=False)
 print(latex_table.replace("_", " "))
 # %%
 # CSV text:
-print(pivot)
+print(regression_pivot)
+
+# CSV text:
+print(classification_pivot)
 
 # %%

@@ -3,16 +3,16 @@ import pandas as pd
 
 # Load all again
 parameters = [
-    {'degree': 3, 'max_degree': 8, 'd': 1, 'rank': 6, 'cpd_rank': 100},
-    {'degree': 3, 'max_degree': 8, 'd': 3, 'rank': 12, 'cpd_rank': 100},
-    {'degree': 3, 'max_degree': 8, 'd': 7, 'rank': 24, 'cpd_rank': 100},
-    {'degree': 5, 'max_degree': 10, 'd': 1, 'rank': 12, 'cpd_rank': 100},
-    {'degree': 5, 'max_degree': 10, 'd': 3, 'rank': 24, 'cpd_rank': 100},
-    {'degree': 5, 'max_degree': 10, 'd': 7, 'rank': 38, 'cpd_rank': 100},
+        # {'degree': 3, 'max_degree': 8, 'd': 1, 'rank': 6, 'cpd_rank': 100},
+        # {'degree': 3, 'max_degree': 8, 'd': 3, 'rank': 12, 'cpd_rank': 100},
+        {'degree': 3, 'max_degree': 8, 'd': 7, 'rank': 24, 'cpd_rank': 100},
+        # {'degree': 5, 'max_degree': 10, 'd': 1, 'rank': 12, 'cpd_rank': 100},
+        {'degree': 5, 'max_degree': 10, 'd': 3, 'rank': 24, 'cpd_rank': 100},
+        # {'degree': 5, 'max_degree': 10, 'd': 7, 'rank': 38, 'cpd_rank': 100},
 ]
 all_dfs = []
 for params in parameters:
-    df = pd.read_csv(f"results_d{params['d']}_deg{params['degree']}_rank{params['rank']}_cpdrank{params['cpd_rank']}.csv")
+    df = pd.read_csv(f"results_d{params['d']}_deg{params['degree']}_rank{params['rank']}_cpdrank{params['cpd_rank']}_r2.csv")
     # In `name` column replace with the following mapping:
     name_mapping = {
         'Poly.Reg.': 'Poly Regr',
@@ -39,7 +39,7 @@ for params, df in zip(parameters, all_dfs):
     sns.lineplot(
         data=df,
         x="Model Degree",
-        y="rmse",
+        y="loss",
         style="Num samples",
         hue="Model",
         markers=True,
@@ -47,9 +47,8 @@ for params, df in zip(parameters, all_dfs):
         palette='tab10'
     )
 
-    plt.yscale("log")
     plt.title(f"RMSE for problems with dimension {params['d']} and polynomial degree {params['degree']}")
-    plt.ylabel("Validation Loss")
+    plt.ylabel("R-squared")
     plt.tight_layout(pad=1.0)
     #plt.savefig(f"figs/ablation_d{params['d']}_deg{params['degree']}_rank{params['rank']}_cpdrank{params['cpd_rank']}.pdf", bbox_inches='tight', pad_inches=0)
 #%%
