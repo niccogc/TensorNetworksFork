@@ -113,11 +113,12 @@ class TNMLRegressor(BaseEstimator, RegressorMixin):
                  early_stopping=0,
                  basis='sin-cos', # 'sin-cos' or 'polynomial
                  degree=3, # for polynomial basis
-                 verbose=0):
+                 verbose=0,
+                 constrict_bond= True):
         self.r = r
         self.input_dim = degree+1 if basis == 'polynomial' else 2
         self.output_dim = output_dim
-        self.constrict_bond = True
+        self.constrict_bond = constrict_bond 
         self.perturb = False
         self.seed = seed
         self.device = device
@@ -137,7 +138,7 @@ class TNMLRegressor(BaseEstimator, RegressorMixin):
         self.basis = basis
         self.degree = degree
         self.verbose = verbose
-
+        print(self.eps)
         self._model = None
         if self.perturb and self.output_dim > 1:
             raise ValueError("perturb not supported for output dim > 1")
@@ -214,6 +215,7 @@ class TNMLRegressor(BaseEstimator, RegressorMixin):
             verbose=self.verbose
         )
 
+        self._model.tensor_network.orthonormalize_left()
         # Call accumulating_swipe
         self._model.tensor_network.accumulating_swipe(
             X_train, y_train, self.bf,
