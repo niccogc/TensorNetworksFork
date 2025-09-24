@@ -2,6 +2,7 @@ import numpy as np
 from time import time
 from functools import partial
 import torch
+import math
 from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.metrics import r2_score, root_mean_squared_error, accuracy_score
 from tensor.layers import TensorTrainLayer
@@ -10,7 +11,7 @@ from tensor.bregman import SquareBregFunction
 def fbasis(X):
     Input = []
     for i in range(X.shape[-1]):
-        T = torch.stack([torch.cos(X[:, i]), torch.sin(X[:,i])], dim=-1)
+        T = torch.stack([torch.cos((0.5*math.pi)*X[:, i]), torch.sin((0.5*math.pi)*X[:,i])], dim=-1)
         Input.append(T)
     return Input
 
