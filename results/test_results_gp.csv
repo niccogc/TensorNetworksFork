@@ -60,3 +60,4 @@
 20250922_232026,gp,student_dropout,RBF_ARD_plus_DotProduct,1e-06,nan,nan,0.7831325301204819,nan,nan
 20250923_070328,gp,winequalityc,RBF_ARD_plus_DotProduct_WhiteKernel,1e-06,nan,nan,0.6102564102564103,nan,nan
 20250923_105511,gp,winequalityc,RBF_ARD_plus_DotProduct_WhiteKernel,1e-06,nan,nan,0.6102564102564103,nan,nan
+20250923_144711,gp,winequalityc,RBF_ARD_plus_DotProduct_WhiteKernel,1e-06,nan,nan,0.6102564102564103,nan,nan
