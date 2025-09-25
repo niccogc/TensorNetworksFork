@@ -295,8 +295,9 @@ class TensorNetwork:
         # Solve the system
         A_f = A.flatten(0, A.ndim//2-1).flatten(1, -1)
         b_f = b.flatten()
-
         scale = A_f.diag().abs().mean()
+        if scale == 0:
+            scale = 1
         A_f = A_f / scale
         b_f = b_f / scale
 
@@ -310,7 +311,6 @@ class TensorNetwork:
         elif method.lower().startswith('ridge_cholesky'):
             A_f = A_f + (2 * eps) * torch.eye(A_f.shape[-1], dtype=A_f.dtype, device=A_f.device)
             b_f = b_f + (2 * eps) * node.tensor.flatten()
-
             L = torch.linalg.cholesky(A_f)
             x = torch.cholesky_solve(-b_f.unsqueeze(-1), L)
             x = x.squeeze(-1)

@@ -150,7 +150,7 @@ def train_model(args, data=None, test=False):
         early_stopping=args.early_stopping if args.early_stopping > 0 else None,
         basis='polynomial' if 'poly' in args.model_type else 'sin-cos',
         degree=args.degree,
-        constrict_bond=False
+        constrict_bond=True
     )
     # Add num parameters to config
     model.fit(X_train, y_train, X_val, y_val)
@@ -203,12 +203,12 @@ if __name__ == '__main__':
     rs = [int(os.getenv("R", "4"))]
     args.model_type = os.getenv("MT", "sin-cos")
     poly_degrees = [3] #[1,2,3,4,5,6]
-    args.num_swipes = 100
+    args.num_swipes = 1
     args.lr = 1.0
     args.eps_start = float(os.getenv("ES", 150.0))
     args.eps_decay = float(os.getenv("ED", 0.01))
-    args.batch_size = int(os.getenv("BS", 2048))
-    args.verbose = 1
+    args.batch_size = int(os.getenv("BS", 2048*32*16))
+    args.verbose = 2
     args.method = 'ridge_cholesky'
     args.lin_dim = None
     basis = os.getenv("MT", None)
